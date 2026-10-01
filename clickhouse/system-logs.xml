@@ -1,0 +1,30 @@
+<!--
+Problem: Default system logs generate millions of rows per hour, causing 30-40% idle CPU from
+continuous MergeTree background merges. metric_log alone generates ~75 rows/sec (one per metric
+per second).
+
+Strategy:   - Disable all high-frequency logs not needed for development   - Keep only query_log
+(debug queries) and error_log (catch problems)
+
+Production note: ClickHouse Cloud manages system log retention automatically. If self-hosting,
+adjust TTLs upward (e.g., 30d for query_log, 7d for others).
+-->
+<clickhouse>
+    <!-- Disable high-frequency logs not needed for development -->
+    <asynchronous_metric_log remove="1"/>
+    <trace_log remove="1"/>
+    <processors_profile_log remove="1"/>
+    <metric_log remove="1"/>
+    <text_log remove="1"/>
+    <part_log remove="1"/>
+    <query_metric_log remove="1"/>
+
+    <query_log>
+        <flush_interval_milliseconds>30000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 7 DAY</ttl>
+    </query_log>
+    <error_log>
+        <flush_interval_milliseconds>60000</flush_interval_milliseconds>
+        <ttl>event_date + INTERVAL 1 DAY</ttl>
+    </error_log>
+</clickhouse>

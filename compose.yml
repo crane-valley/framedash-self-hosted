@@ -1,0 +1,237 @@
+name: framedash-self-hosted
+
+x-common-env: &common-env
+  NODE_ENV: production
+  ENVIRONMENT: production
+  DEPLOYMENT_ENV: production
+  DATABASE_DRIVER: postgres
+  DATABASE_URL: postgres://framedash:${POSTGRES_PASSWORD:?Run
+    configure.mjs}@postgres:5432/framedash
+  CLICKHOUSE_URL: http://clickhouse:8123?user=default&password=${CLICKHOUSE_PASSWORD:?Run
+    configure.mjs}
+  CLICKHOUSE_DATABASE: framedash
+  UPSTASH_REDIS_REST_URL: http://redis-http:80
+  UPSTASH_REDIS_REST_TOKEN: ${REDIS_REST_TOKEN:?Run configure.mjs}
+  AWS_REGION: ${AWS_REGION:?Set AWS_REGION}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
+  SQS_QUEUE_URL: ${SQS_QUEUE_URL:?Set SQS_QUEUE_URL}
+  SQS_DLQ_URL: ${SQS_DLQ_URL:?Set SQS_DLQ_URL}
+  SQS_ENDPOINT: ${SQS_ENDPOINT:-}
+  AUTH_SECRET: ${AUTH_SECRET:?Run configure.mjs}
+  CRON_SECRET: ${CRON_SECRET:?Run configure.mjs}
+  AUDIT_LOG_HASH_SECRET: ${AUDIT_LOG_HASH_SECRET:?Run configure.mjs}
+  ERASURE_SUPPRESSION_HASH_SECRET: ${ERASURE_SUPPRESSION_HASH_SECRET:?Run configure.mjs}
+  PLAYER_ERASURE_ENCRYPTION_KEY: ${PLAYER_ERASURE_ENCRYPTION_KEY:?Run configure.mjs}
+
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 10m, max-file: "3" }
+
+x-runtime: &runtime
+  image: framedash-self-hosted-runtime:0.1.0-preview.1
+  restart: unless-stopped
+  stop_grace_period: 3m
+  networks: [ backend ]
+  logging: *logging
+  environment: *common-env
+  pull_policy: never
+
+services:
+  proxy:
+    image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    logging: *logging
+    restart: unless-stopped
+    ports: [ "80:80", "443:443" ]
+    environment:
+      DOMAIN: ${DOMAIN:?Set DOMAIN}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ${DATA_DIR:?Set DATA_DIR}/caddy-data:/data
+      - ${DATA_DIR:?Set DATA_DIR}/caddy-config:/config
+    networks:
+      backend:
+        ipv4_address: 172.28.31.10
+    depends_on: [ web, ingest ]
+    mem_limit: 256m
+
+  web:
+    image: framedash-self-hosted-web:0.1.0-preview.1
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      <<: *common-env
+      FRAMEDASH_SELF_HOSTED: "true"
+      S3_ENDPOINT:
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
+      CLICKHOUSE_READONLY_URL: http://clickhouse:8123?user=framedash_readonly&password=${CLICKHOUSE_READONLY_PASSWORD:?Run
+        configure.mjs}
+      AUTH_URL: ${APP_URL}
+      NEXT_PUBLIC_APP_URL: ${APP_URL}
+      AUTH_TRUST_HOST: "true"
+      AUTH_TRUST_PROXY_HEADERS: "true"
+      SELF_HOSTED_TELEMETRY_ENABLED: "false"
+      STORAGE_PROVIDER: s3
+      INGEST_PUBLIC_URL: ${APP_URL}/v1/events
+      S3_BUCKET_NAME: ${S3_BUCKET_NAME:?Set S3_BUCKET_NAME}
+      SMTP_URL: ${SMTP_URL:?Set SMTP_URL}
+      EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM}
+      SELF_HOSTED_PRIVACY_CONTACT: ${SELF_HOSTED_PRIVACY_CONTACT:-}
+      PLATFORM_ADMIN_EMAILS: ${ADMIN_EMAIL:?Set ADMIN_EMAIL}
+    networks: [ backend ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis-http:
+        condition: service_started
+    mem_limit: 2g
+    pull_policy: never
+
+  ingest:
+    <<: *runtime
+    command: [ node, apps/self-hosted/dist/ingest.js ]
+    environment:
+      <<: *common-env
+      SELF_HOSTED_TRUSTED_PROXY_IPS: 172.28.31.10
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis-http:
+        condition: service_started
+    mem_limit: 512m
+
+  consumer:
+    <<: *runtime
+    command: [ node, apps/self-hosted/dist/consumer.js ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      redis-http:
+        condition: service_started
+    mem_limit: 512m
+
+  scheduler:
+    <<: *runtime
+    command: [ node, infra/self-hosted/scheduler.mjs ]
+    depends_on: [ web ]
+    mem_limit: 128m
+
+  migrate:
+    <<: *runtime
+    restart: "no"
+    command: [ pnpm, migrate:all ]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+    mem_limit: 512m
+
+  bootstrap:
+    <<: *runtime
+    restart: "no"
+    profiles: [ bootstrap ]
+    command: [ node, infra/self-hosted/bootstrap.mjs ]
+    environment:
+      <<: *common-env
+      FRAMEDASH_SELF_HOSTED: "true"
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run configure.mjs}
+      SDK_API_KEY: ${SDK_API_KEY:?Run configure.mjs}
+      ADMIN_NAME: ${ADMIN_NAME:-Instance administrator}
+      WORKSPACE_NAME: ${WORKSPACE_NAME:-Self-hosted workspace}
+      WORKSPACE_SLUG: ${WORKSPACE_SLUG:-self-hosted-workspace}
+      PROJECT_NAME: ${PROJECT_NAME:-First project}
+      SDK_API_KEY_NAME: ${SDK_API_KEY_NAME:-SDK ingest}
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    mem_limit: 256m
+
+  postgres:
+    image: postgres@sha256:97ff59a4e30e08d1c11bdcd9455e7832368c0572b576c9092cde2df4ae5552a3
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: framedash
+      POSTGRES_DB: framedash
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ${DATA_DIR}/postgres:/var/lib/postgresql/data
+    networks: [ backend ]
+    healthcheck:
+      test: [ CMD-SHELL, pg_isready -U framedash -d framedash ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    mem_limit: 1g
+
+  clickhouse:
+    image: clickhouse/clickhouse-server@sha256:b20a07891b9051db5b97c5d64cd0c7b7f2b50213baedaaac7c526e963447da89
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_READONLY_PASSWORD_SHA256: ${CLICKHOUSE_READONLY_PASSWORD_SHA256:?Run configure.mjs}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
+    volumes:
+      - ${DATA_DIR}/clickhouse:/var/lib/clickhouse
+      - ./clickhouse/system-logs.xml:/etc/clickhouse-server/config.d/system-logs.xml:ro
+      - ./clickhouse/server-tuning.xml:/etc/clickhouse-server/config.d/server-tuning.xml:ro
+      - ./clickhouse/profile.xml:/etc/clickhouse-server/users.d/profile.xml:ro
+    networks: [ backend ]
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "clickhouse-client --password \"$$CLICKHOUSE_PASSWORD\" --query
+            'SELECT 1'"
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+    mem_limit: 3g
+
+  redis:
+    image: redis@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
+    logging: *logging
+    restart: unless-stopped
+    command:
+      [
+        sh,
+        -c,
+        'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
+      ]
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?Run configure.mjs}
+    volumes:
+      - ${DATA_DIR}/redis:/data
+    networks: [ backend ]
+    healthcheck:
+      test: [ CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping' ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    mem_limit: 256m
+
+  redis-http:
+    image: hiett/serverless-redis-http@sha256:65128347949bca511e448fd7238780d624573d74c22b79155a7563db19e9b678
+    logging: *logging
+    restart: unless-stopped
+    environment:
+      SRH_MODE: env
+      SRH_TOKEN: ${REDIS_REST_TOKEN}
+      SRH_CONNECTION_STRING: redis://:${REDIS_PASSWORD}@redis:6379
+    networks: [ backend ]
+    depends_on:
+      redis:
+        condition: service_healthy
+    mem_limit: 128m
+
+networks:
+  backend:
+    ipam:
+      config:
+        - subnet: 172.28.31.0/24
+          ip_range: 172.28.31.128/25

@@ -1,0 +1,41 @@
+<clickhouse>
+    <profiles>
+        <default>
+            <async_insert>1</async_insert>
+            <wait_for_async_insert>1</wait_for_async_insert>
+            <async_insert_busy_timeout_ms>1000</async_insert_busy_timeout_ms>
+            <max_execution_time>60</max_execution_time>
+            <max_memory_usage>768Mi</max_memory_usage>
+            <max_bytes_before_external_group_by>384Mi</max_bytes_before_external_group_by>
+            <max_bytes_before_external_sort>384Mi</max_bytes_before_external_sort>
+        </default>
+        <framedash_query>
+            <readonly>0</readonly>
+            <session_timezone>UTC</session_timezone>
+            <max_execution_time>10</max_execution_time>
+            <max_result_rows>10000</max_result_rows>
+            <max_memory_usage>805306368</max_memory_usage>
+            <max_rows_to_read>100000000</max_rows_to_read>
+            <max_bytes_to_read>2000000000</max_bytes_to_read>
+            <constraints>
+                <max_execution_time><min>1</min><max>10</max></max_execution_time>
+                <max_result_rows><min>1</min><max>10000</max></max_result_rows>
+                <max_memory_usage><min>1</min><max>805306368</max></max_memory_usage>
+                <max_rows_to_read><min>1</min><max>100000000</max></max_rows_to_read>
+                <max_bytes_to_read><min>1</min><max>2000000000</max></max_bytes_to_read>
+            </constraints>
+        </framedash_query>
+    </profiles>
+    <users>
+        <framedash_readonly>
+            <password_sha256_hex from_env="CLICKHOUSE_READONLY_PASSWORD_SHA256"/>
+            <networks><ip>::/0</ip></networks>
+            <profile>framedash_query</profile>
+            <quota>default</quota>
+            <grants>
+                <query>GRANT SELECT ON framedash.events</query>
+                <query>GRANT SELECT ON framedash.daily_sessions_project_mv</query>
+            </grants>
+        </framedash_readonly>
+    </users>
+</clickhouse>

@@ -1,0 +1,6 @@
+/.env
+/.env.*
+/.data/
+/framedash-images-*.tar.gz
+/framedash-base-sources-*.tar.gz
+/framedash-installer-*.tar.gz

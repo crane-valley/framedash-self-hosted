@@ -1,0 +1,649 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Framedash self-hosted pilot: one EC2 instance, encrypted retained data volume, SQS and S3. Requires existing public subnet and explicit account verification.",
+  "Metadata": {
+    "ExpectedAccountId": "Deployment tooling must compare STS caller Account to ExpectedAccountId before creating or updating this stack.",
+    "AWSToolsMetrics": {
+      "AWSAgentToolkit": "aws-cloudformation@3"
+    },
+    "com.aws.cloudformation.Context": {
+      "arch": "One bounded trial host runs shared application images and private local databases; managed queues and object storage survive host replacement.",
+      "must": [
+        "Account must match ExpectedAccountId in the deployment workflow.",
+        "One instance only; auto-stop bounds runtime, not total spend.",
+        "No inbound access in the default SSM-only trial."
+      ],
+      "ref": [
+        {
+          "at": "README.md",
+          "has": "Preview setup and limitations",
+          "scope": "local"
+        }
+      ]
+    }
+  },
+  "Parameters": {
+    "ExpectedAccountId": {
+      "Type": "String",
+      "AllowedPattern": "^[0-9]{12}$"
+    },
+    "VpcId": {
+      "Type": "AWS::EC2::VPC::Id"
+    },
+    "PublicSubnetId": {
+      "Type": "AWS::EC2::Subnet::Id"
+    },
+    "AvailabilityZone": {
+      "Type": "AWS::EC2::AvailabilityZone::Name",
+      "Description": "Must match PublicSubnetId."
+    },
+    "AllowedClientCidr": {
+      "Type": "String",
+      "AllowedPattern": "^(?!0\\.0\\.0\\.0/0$)(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(?:[1-9]|[12][0-9]|3[0-2])$(?![\\s\\S])",
+      "Description": "Operator or office IPv4 CIDR allowed to use HTTPS, with prefix 1 through 32. All /0 CIDRs, including 0.0.0.0/0, are forbidden.",
+      "Default": "127.0.0.1/32"
+    },
+    "InstanceType": {
+      "Type": "String",
+      "Default": "t3.xlarge",
+      "AllowedValues": [
+        "t3.large",
+        "t3.xlarge"
+      ],
+      "Description": "One instance only. t3.xlarge has 16 GiB for image builds; t3.large is an optional cheaper runtime test."
+    },
+    "DataVolumeSize": {
+      "Type": "Number",
+      "Default": 80,
+      "MinValue": 30,
+      "MaxValue": 250
+    },
+    "AmiId": {
+      "Type": "AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>",
+      "Default": "/aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64"
+    },
+    "AutoStopHours": {
+      "Type": "Number",
+      "Default": 8,
+      "AllowedValues": [
+        1,
+        2,
+        4,
+        8,
+        12,
+        24
+      ],
+      "Description": "Initial host-bootstrap timer setting. Updating this parameter does not update the installed timer on an existing host."
+    },
+    "EnablePublicHttps": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ]
+    }
+  },
+  "Conditions": {
+    "PublicHttps": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnablePublicHttps"
+        },
+        "true"
+      ]
+    }
+  },
+  "Resources": {
+    "DeadLetterQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "SqsManagedSseEnabled": true,
+        "MessageRetentionPeriod": 1209600
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "The default consumer leaves failed telemetry in the DLQ for operator diagnosis, subject to SQS retention expiry.",
+          "must": [
+            "Do not consume the DLQ automatically; explicit discard deletes acknowledged messages and retention expiry also removes them."
+          ]
+        }
+      }
+    },
+    "EventQueue": {
+      "Type": "AWS::SQS::Queue",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "SqsManagedSseEnabled": true,
+        "VisibilityTimeout": 180,
+        "ReceiveMessageWaitTimeSeconds": 20,
+        "MessageRetentionPeriod": 345600,
+        "RedrivePolicy": {
+          "deadLetterTargetArn": {
+            "Fn::GetAtt": [
+              "DeadLetterQueue",
+              "Arn"
+            ]
+          },
+          "maxReceiveCount": 5
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Durable delivery separates request acceptance from database availability.",
+          "must": [
+            "Consumer processing must tolerate repeat delivery.",
+            "Preserve the dead-letter queue relationship."
+          ]
+        }
+      }
+    },
+    "StorageBucket": {
+      "Type": "AWS::S3::Bucket",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        },
+        "VersioningConfiguration": {
+          "Status": "Enabled"
+        },
+        "PublicAccessBlockConfiguration": {
+          "BlockPublicAcls": true,
+          "BlockPublicPolicy": true,
+          "IgnorePublicAcls": true,
+          "RestrictPublicBuckets": true
+        },
+        "OwnershipControls": {
+          "Rules": [
+            {
+              "ObjectOwnership": "BucketOwnerEnforced"
+            }
+          ]
+        },
+        "LifecycleConfiguration": {
+          "Rules": [
+            {
+              "Id": "AbortIncompleteUploads",
+              "Status": "Enabled",
+              "AbortIncompleteMultipartUpload": {
+                "DaysAfterInitiation": 7
+              }
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Uploaded assets survive application-host loss without exposing data publicly.",
+          "must": [
+            "Keep encryption and public-access blocking.",
+            "Retain versions until the operator completes recovery or data-disposal review."
+          ]
+        }
+      }
+    },
+    "StorageBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "Bucket": {
+          "Ref": "StorageBucket"
+        },
+        "PolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Deny",
+              "Principal": "*",
+              "Action": "s3:*",
+              "Resource": [
+                {
+                  "Fn::GetAtt": [
+                    "StorageBucket",
+                    "Arn"
+                  ]
+                },
+                {
+                  "Fn::Sub": "${StorageBucket.Arn}/*"
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": "false"
+                }
+              }
+            }
+          ]
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Transport enforcement also applies to requests allowed by identity policies.",
+          "must": [
+            "Deny insecure transport; do not add public allow statements.",
+            "Retain the transport policy with its retained bucket."
+          ]
+        }
+      }
+    },
+    "InstanceRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ec2.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "ManagedPolicyArns": [
+          {
+            "Fn::Sub": "arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore"
+          }
+        ],
+        "Policies": [
+          {
+            "PolicyName": "FramedashQueueAndStorage",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:SendMessage",
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:ChangeMessageVisibility",
+                    "sqs:GetQueueAttributes"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "EventQueue",
+                        "Arn"
+                      ]
+                    },
+                    {
+                      "Fn::GetAtt": [
+                        "DeadLetterQueue",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:ListBucket",
+                    "s3:ListBucketMultipartUploads"
+                  ],
+                  "Resource": {
+                    "Fn::GetAtt": [
+                      "StorageBucket",
+                      "Arn"
+                    ]
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "s3:GetObject",
+                    "s3:GetObjectVersion",
+                    "s3:PutObject",
+                    "s3:DeleteObject",
+                    "s3:AbortMultipartUpload",
+                    "s3:ListMultipartUploadParts"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "${StorageBucket.Arn}/*"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Instance identity avoids static AWS credentials in the application distribution.",
+          "must": [
+            "Application grants remain scoped to this stack queues and bucket.",
+            "Do not grant secret-read or account-administration actions to the application role."
+          ]
+        }
+      }
+    },
+    "InstanceProfile": {
+      "Type": "AWS::IAM::InstanceProfile",
+      "Properties": {
+        "Roles": [
+          {
+            "Ref": "InstanceRole"
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "EC2 supplies rotating workload credentials through instance metadata.",
+          "must": [
+            "Keep the instance role relationship; no user access keys."
+          ]
+        }
+      }
+    },
+    "SecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Properties": {
+        "GroupDescription": "Framedash optional HTTP/HTTPS for the nominated CIDR; no default ingress.",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": {
+          "Fn::If": [
+            "PublicHttps",
+            [
+              {
+                "IpProtocol": "tcp",
+                "FromPort": 443,
+                "ToPort": 443,
+                "CidrIp": {
+                  "Ref": "AllowedClientCidr"
+                }
+              },
+              {
+                "IpProtocol": "tcp",
+                "FromPort": 80,
+                "ToPort": 80,
+                "CidrIp": {
+                  "Ref": "AllowedClientCidr"
+                }
+              }
+            ],
+            []
+          ]
+        },
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "-1",
+            "CidrIp": "0.0.0.0/0"
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "SSM access removes the need for inbound administration ports.",
+          "must": [
+            "Default trial has no inbound rules.",
+            "Do not expose PostgreSQL, ClickHouse, Redis or SSH.",
+            "Optional public listeners remain scoped to the nominated client CIDR."
+          ]
+        }
+      }
+    },
+    "DataVolume": {
+      "Type": "AWS::EC2::Volume",
+      "DeletionPolicy": "Snapshot",
+      "UpdateReplacePolicy": "Snapshot",
+      "Properties": {
+        "AvailabilityZone": {
+          "Ref": "AvailabilityZone"
+        },
+        "Size": {
+          "Ref": "DataVolumeSize"
+        },
+        "VolumeType": "gp3",
+        "Encrypted": true,
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-data"
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "A separate persistent disk permits cold backup independently of disposable application images.",
+          "must": [
+            "Zone must match the selected subnet and instance.",
+            "Keep encryption and snapshot policies on deletion or replacement.",
+            "Bootstrap never formats disks. The operator must positively verify a newly created blank volume before its explicit initialization during the bounded bootstrap wait."
+          ]
+        }
+      }
+    },
+    "Instance": {
+      "Type": "AWS::EC2::Instance",
+      "CreationPolicy": {
+        "ResourceSignal": {
+          "Count": 1,
+          "Timeout": "PT30M"
+        }
+      },
+      "Properties": {
+        "ImageId": {
+          "Ref": "AmiId"
+        },
+        "InstanceType": {
+          "Ref": "InstanceType"
+        },
+        "IamInstanceProfile": {
+          "Ref": "InstanceProfile"
+        },
+        "DisableApiTermination": true,
+        "Volumes": [
+          {
+            "Device": "/dev/sdf",
+            "VolumeId": {
+              "Ref": "DataVolume"
+            }
+          }
+        ],
+        "MetadataOptions": {
+          "HttpTokens": "required",
+          "HttpPutResponseHopLimit": 2
+        },
+        "BlockDeviceMappings": [
+          {
+            "DeviceName": "/dev/xvda",
+            "Ebs": {
+              "VolumeSize": 30,
+              "VolumeType": "gp3",
+              "Encrypted": true,
+              "DeleteOnTermination": true
+            }
+          }
+        ],
+        "NetworkInterfaces": [
+          {
+            "AssociatePublicIpAddress": true,
+            "DeviceIndex": "0",
+            "SubnetId": {
+              "Ref": "PublicSubnetId"
+            },
+            "GroupSet": [
+              {
+                "Ref": "SecurityGroup"
+              }
+            ]
+          }
+        ],
+        "Tags": [
+          {
+            "Key": "Name",
+            "Value": {
+              "Fn::Sub": "${AWS::StackName}-pilot"
+            }
+          }
+        ],
+        "UserData": {
+          "Fn::Base64": {
+            "Fn::Join": [
+              "",
+              [
+                "#!/bin/bash\nset -euo pipefail\nstack_name='",
+                {
+                  "Ref": "AWS::StackName"
+                },
+                "'\nregion='",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "'\nfinish_bootstrap() {\n  status=$?\n  trap - EXIT\n  set +e\n  for attempt in $(seq 1 5); do\n    /opt/aws/bin/cfn-signal -e \"$status\" --stack \"$stack_name\" --resource Instance --region \"$region\" && exit \"$status\"\n    sleep 5\n  done\n  exit 1\n}\ntrap finish_bootstrap EXIT\n",
+                "\ncat > /etc/systemd/system/framedash-autostop.service <<'EOF'\n[Unit]\nDescription=Stop the Framedash pilot instance\n[Service]\nType=oneshot\nExecStart=/usr/sbin/shutdown -h now\nEOF\ncat > /etc/systemd/system/framedash-autostop.timer <<'EOF'\n[Unit]\nDescription=Bound the Framedash pilot runtime\n[Timer]\nOnBootSec=",
+                {
+                  "Ref": "AutoStopHours"
+                },
+                "h\nUnit=framedash-autostop.service\n[Install]\nWantedBy=timers.target\nEOF\nsystemctl daemon-reload\nsystemctl enable --now framedash-autostop.timer\n",
+                "dnf install -y aws-cfn-bootstrap docker git nodejs22 nodejs22-npm\nalternatives --set node /usr/bin/node-22\nnode -e 'if (process.versions.node.split(\".\")[0] !== \"22\") process.exit(1)'\nsystemctl disable --now docker\ninstall -d /usr/local/lib/docker/cli-plugins\ncompose_version=v2.39.4\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/docker-compose-linux-x86_64\" -o /tmp/docker-compose-linux-x86_64\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/checksums.txt\" -o /tmp/checksums.txt\n(cd /tmp && grep -E ' [*]?docker-compose-linux-x86_64$' checksums.txt | sha256sum --check)\ninstall -m 755 /tmp/docker-compose-linux-x86_64 /usr/local/lib/docker/cli-plugins/docker-compose\nvolume_id=",
+                {
+                  "Ref": "DataVolume"
+                },
+                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nwait_for_data_filesystem() {\n  deadline=$((SECONDS + 1200))\n  udevadm settle --timeout=10\n  while ((SECONDS < deadline)); do\n    if filesystem=$(blkid --probe -s TYPE -o value \"$device\"); then\n      test \"$filesystem\" = ext4 || return 1\n      return 0\n    fi\n    sleep 5\n  done\n  return 1\n}\nprintf 'Waiting up to 20 minutes for operator-initialized ext4 on the exact data volume.\\n'\nwait_for_data_filesystem\ninstall -d /srv/framedash\nuuid=$(blkid --probe -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
+              ]
+            ]
+          }
+        },
+        "CreditSpecification": {
+          "CPUCredits": "standard"
+        },
+        "InstanceInitiatedShutdownBehavior": "stop"
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "A single host limits trial complexity and avoids managed-database and NAT fixed costs. The managed VPC rule reads only top-level SubnetId; pilot.guard verifies the actual network-interface subnet instead.",
+          "must": [
+            "Install the auto-stop timer before dependencies so setup failure remains bounded.",
+            "Require IMDSv2 with a container-compatible hop limit.",
+            "Attach the existing data volume within this resource to avoid a signal/attachment dependency cycle.",
+            "Signal successful creation only after Node 22, the exact data mount and guarded Docker startup pass.",
+            "Docker must stop or refuse startup if the data mount disappears or its UUID changes.",
+            "Use standard CPU credits and preserve termination protection."
+          ]
+        },
+        "guard": {
+          "SuppressedRules": [
+            "EC2_INSTANCES_IN_VPC"
+          ]
+        }
+      }
+    },
+    "PublicIp": {
+      "Type": "AWS::EC2::EIP",
+      "Properties": {
+        "Domain": "vpc"
+      },
+      "Condition": "PublicHttps",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Optional stable address supports a later DNS deployment without changing application URLs.",
+          "must": [
+            "Create only when the reviewed public HTTPS path is enabled."
+          ]
+        }
+      }
+    },
+    "PublicIpAssociation": {
+      "Type": "AWS::EC2::EIPAssociation",
+      "Properties": {
+        "InstanceId": {
+          "Ref": "Instance"
+        },
+        "AllocationId": {
+          "Fn::GetAtt": [
+            "PublicIp",
+            "AllocationId"
+          ]
+        }
+      },
+      "Condition": "PublicHttps",
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "DNS must continue to identify the nominated application host after a stop/start.",
+          "must": [
+            "Keep the address attached only to this stack instance."
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ExpectedAccountId": {
+      "Value": {
+        "Ref": "ExpectedAccountId"
+      },
+      "Description": "Account expected by the guarded deployment workflow."
+    },
+    "InstanceId": {
+      "Value": {
+        "Ref": "Instance"
+      },
+      "Description": "Pilot host for SSM administration."
+    },
+    "PublicIp": {
+      "Value": {
+        "Fn::If": [
+          "PublicHttps",
+          {
+            "Ref": "PublicIp"
+          },
+          {
+            "Fn::GetAtt": [
+              "Instance",
+              "PublicIp"
+            ]
+          }
+        ]
+      },
+      "Description": "Optional stable DNS address or the SSM trial instance public address."
+    },
+    "DataVolumeId": {
+      "Value": {
+        "Ref": "DataVolume"
+      },
+      "Description": "Exact persistent data disk for snapshot and restore."
+    },
+    "QueueUrl": {
+      "Value": {
+        "Ref": "EventQueue"
+      },
+      "Description": "Telemetry queue used by ingest and consumer."
+    },
+    "DeadLetterQueueUrl": {
+      "Value": {
+        "Ref": "DeadLetterQueue"
+      },
+      "Description": "Failed telemetry left unconsumed by default, subject to 14-day expiry; explicit discard is irreversible."
+    },
+    "StorageBucketName": {
+      "Value": {
+        "Ref": "StorageBucket"
+      },
+      "Description": "Private uploaded-asset bucket."
+    },
+    "Region": {
+      "Value": {
+        "Ref": "AWS::Region"
+      },
+      "Description": "Region for the application AWS SDK clients."
+    }
+  }
+}
