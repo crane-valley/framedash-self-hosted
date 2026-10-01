@@ -47,7 +47,16 @@ private S3 and encrypted SQS/DLQ. Supply your own account ID, VPC, public subnet
 availability zone. Before creating a stack, verify your authenticated account against
 `ExpectedAccountId`; that parameter alone does not authenticate the caller. The default opens no
 inbound ports and uses SSM administration. IMDSv2 with hop limit two lets container SDKs use the
-instance role. Off AWS, supply an equivalent reviewed AWS credential mechanism.
+instance role. Leave `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` and `AWS_SESSION_TOKEN` unset
+when using the instance role. Off AWS, supply your reviewed credentials privately through those
+configuration fields; Compose forwards them to the SDK containers. `configure.mjs --local`
+generates credentials for LocalStack only, and requires a separately configured local emulator.
+
+The default Amazon Linux 2023 bootstrap installs Node 22 and Docker. Stack creation waits up to
+30 minutes for the host's completion signal. Docker requires the data filesystem mounted at
+`/srv/framedash` with its recorded UUID, including after a reboot. The retained S3 bucket keeps
+its policy denying insecure transport. These revised boot guards passed static and shell tests;
+a new AWS host creation or reboot was not performed after the test infrastructure was deleted.
 
 The host auto-stops eight hours after each boot by default. This is a runtime bound rather than
 a spending limit. EBS, retained buckets/queues and snapshots can still incur charges after a stop
@@ -59,6 +68,13 @@ use your approved administrator email. The generator creates passwords and priva
 refuses to overwrite an existing file and prints only the destination path.
 The supplied `.gitignore` excludes the default private configuration and local data paths.
 Exclude any custom configuration or backup paths from source control as well.
+
+The generated ClickHouse read-only password and its matching SHA-256 hash belong in the same
+private configuration. Compose provisions `framedash_readonly` from the hash and passes its URL
+to the web query API. This identity has SELECT access only to `framedash.events` and
+`framedash.daily_sessions_project_mv`, with no write or access-management grants. The query client
+applies `readonly=1` and resource limits per request; the separate SELECT grants also prevent
+writes when that request setting is absent. Preserve both generated fields in encrypted backups.
 
 ```sh
 node configure.mjs --aws-test --region YOUR_AWS_REGION \
@@ -116,6 +132,11 @@ curl --fail http://localhost:8088/api/health
 
 The image migrations are the canonical PostgreSQL and ClickHouse migrations and run before the
 application starts. Never edit migration files or reset their journals to bypass a failed upgrade.
+Runtime containers have a three-minute Compose stop grace. Ingest drains accepted requests and
+background work; consumers drain the current SQS batch, then close native database connections.
+The default SQS visibility lease is 120 seconds and renews during processing. This is bounded,
+best-effort shutdown: work exceeding the stop grace or an interrupted host shutdown can be killed
+and replayed after visibility expires. Retain queues and rely on the tested deduplication path.
 Keep the original configuration and privacy keys when updating. The preview has no supported
 upgrade or downgrade contract: test a new version against a restored copy before upgrading an
 installation containing data, and do not assume replacing old images rolls back a migrated schema.

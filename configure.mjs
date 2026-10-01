@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -43,6 +44,7 @@ const bootstrapNames = resolveBootstrapNames({
 for (const value of Object.values(bootstrapNames)) {
 	if (value.includes("'")) throw new Error("Bootstrap configuration names must not contain quotes");
 }
+const clickhouseReadonlyPassword = secret("clickhouse-readonly-password");
 const settings = {
 	...bootstrapNames,
 	DOMAIN: domain,
@@ -65,6 +67,10 @@ const settings = {
 	DATA_DIR: dataDir.replaceAll("\\", "/"),
 	POSTGRES_PASSWORD: secret("postgres-password"),
 	CLICKHOUSE_PASSWORD: secret("clickhouse-password"),
+	CLICKHOUSE_READONLY_PASSWORD: clickhouseReadonlyPassword,
+	CLICKHOUSE_READONLY_PASSWORD_SHA256: createHash("sha256")
+		.update(clickhouseReadonlyPassword)
+		.digest("hex"),
 	REDIS_PASSWORD: secret("redis-password"),
 	REDIS_REST_TOKEN: secret("redis-rest-token"),
 	AUTH_SECRET: secret("auth-secret"),

@@ -13,6 +13,9 @@ x-common-env: &common-env
   UPSTASH_REDIS_REST_URL: http://redis-http:80
   UPSTASH_REDIS_REST_TOKEN: ${REDIS_REST_TOKEN:?Run configure.mjs}
   AWS_REGION: ${AWS_REGION:?Set AWS_REGION}
+  AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID:-}
+  AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY:-}
+  AWS_SESSION_TOKEN: ${AWS_SESSION_TOKEN:-}
   SQS_QUEUE_URL: ${SQS_QUEUE_URL:?Set SQS_QUEUE_URL}
   SQS_DLQ_URL: ${SQS_DLQ_URL:?Set SQS_DLQ_URL}
   SQS_ENDPOINT: ${SQS_ENDPOINT:-}
@@ -25,6 +28,7 @@ x-common-env: &common-env
 x-runtime: &runtime
   image: framedash-self-hosted-runtime:0.1.0-preview.1
   restart: unless-stopped
+  stop_grace_period: 3m
   networks: [ backend ]
   logging:
     driver: json-file
@@ -54,6 +58,8 @@ services:
     environment:
       <<: *common-env
       FRAMEDASH_SELF_HOSTED: "true"
+      CLICKHOUSE_READONLY_URL: http://clickhouse:8123?user=framedash_readonly&password=${CLICKHOUSE_READONLY_PASSWORD:?Run
+        configure.mjs}
       AUTH_URL: ${APP_URL}
       NEXT_PUBLIC_APP_URL: ${APP_URL}
       AUTH_TRUST_HOST: "true"
@@ -157,6 +163,7 @@ services:
     restart: unless-stopped
     environment:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_READONLY_PASSWORD_SHA256: ${CLICKHOUSE_READONLY_PASSWORD_SHA256:?Run configure.mjs}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: "1"
     volumes:
       - ${DATA_DIR}/clickhouse:/var/lib/clickhouse

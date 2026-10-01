@@ -10,6 +10,7 @@ services:
 
   mailpit:
     image: axllent/mailpit@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a
+    restart: unless-stopped
     ports: ["127.0.0.1:8025:8025"]
     networks: [backend]
     mem_limit: 128m

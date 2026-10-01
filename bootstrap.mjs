@@ -8,13 +8,15 @@ export function normalizeBootstrapAdminEmail(supplied) {
 	const email = supplied.trim().toLowerCase();
 	const [local, domain, extra] = email.split("@");
 	const labels = domain?.split(".") ?? [];
-	// Keep the standalone installer aligned with the web credentials' Zod email policy.
+	// The credentials form also rejects domain labels ending in a hyphen, which Zod accepts.
 	if (
 		email.length > 255 ||
 		extra !== undefined ||
 		!/^(?!\.)(?!.*\.\.)[A-Za-z0-9_'+\-.]*[A-Za-z0-9_+-]$/.test(local) ||
 		labels.length < 2 ||
-		!labels.slice(0, -1).every((label) => /^[A-Za-z0-9][A-Za-z0-9-]*$/.test(label)) ||
+		!labels
+			.slice(0, -1)
+			.every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)) ||
 		!/^[A-Za-z]{2,}$/.test(labels.at(-1) ?? "")
 	) {
 		throw new Error("Invalid ADMIN_EMAIL");

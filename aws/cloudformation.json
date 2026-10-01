@@ -194,6 +194,8 @@
     },
     "StorageBucketPolicy": {
       "Type": "AWS::S3::BucketPolicy",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
       "Properties": {
         "Bucket": {
           "Ref": "StorageBucket"
@@ -229,7 +231,8 @@
         "com.aws.cloudformation.Context": {
           "why": "Transport enforcement also applies to requests allowed by identity policies.",
           "must": [
-            "Deny insecure transport; do not add public allow statements."
+            "Deny insecure transport; do not add public allow statements.",
+            "Retain the transport policy with its retained bucket."
           ]
         }
       }
@@ -427,6 +430,12 @@
     },
     "Instance": {
       "Type": "AWS::EC2::Instance",
+      "CreationPolicy": {
+        "ResourceSignal": {
+          "Count": 1,
+          "Timeout": "PT30M"
+        }
+      },
       "Properties": {
         "ImageId": {
           "Ref": "AmiId"
@@ -438,6 +447,14 @@
           "Ref": "InstanceProfile"
         },
         "DisableApiTermination": true,
+        "Volumes": [
+          {
+            "Device": "/dev/sdf",
+            "VolumeId": {
+              "Ref": "DataVolume"
+            }
+          }
+        ],
         "MetadataOptions": {
           "HttpTokens": "required",
           "HttpPutResponseHopLimit": 2
@@ -480,17 +497,25 @@
             "Fn::Join": [
               "",
               [
-                "#!/bin/bash\nset -euo pipefail\n",
+                "#!/bin/bash\nset -euo pipefail\nstack_name='",
+                {
+                  "Ref": "AWS::StackName"
+                },
+                "'\nregion='",
+                {
+                  "Ref": "AWS::Region"
+                },
+                "'\nfinish_bootstrap() {\n  status=$?\n  trap - EXIT\n  set +e\n  for attempt in $(seq 1 5); do\n    /opt/aws/bin/cfn-signal -e \"$status\" --stack \"$stack_name\" --resource Instance --region \"$region\" && exit \"$status\"\n    sleep 5\n  done\n  exit 1\n}\ntrap finish_bootstrap EXIT\n",
                 "\ncat > /etc/systemd/system/framedash-autostop.service <<'EOF'\n[Unit]\nDescription=Stop the Framedash pilot instance\n[Service]\nType=oneshot\nExecStart=/usr/sbin/shutdown -h now\nEOF\ncat > /etc/systemd/system/framedash-autostop.timer <<'EOF'\n[Unit]\nDescription=Bound the Framedash pilot runtime\n[Timer]\nOnBootSec=",
                 {
                   "Ref": "AutoStopHours"
                 },
                 "h\nUnit=framedash-autostop.service\n[Install]\nWantedBy=timers.target\nEOF\nsystemctl daemon-reload\nsystemctl enable --now framedash-autostop.timer\n",
-                "dnf install -y docker git\nsystemctl enable --now docker\ninstall -d /usr/local/lib/docker/cli-plugins\ncompose_version=v2.39.4\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/docker-compose-linux-x86_64\" -o /tmp/docker-compose-linux-x86_64\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/checksums.txt\" -o /tmp/checksums.txt\n(cd /tmp && grep -E ' [*]?docker-compose-linux-x86_64$' checksums.txt | sha256sum --check)\ninstall -m 755 /tmp/docker-compose-linux-x86_64 /usr/local/lib/docker/cli-plugins/docker-compose\nvolume_id=",
+                "dnf install -y aws-cfn-bootstrap docker git nodejs22 nodejs22-npm\nalternatives --set node /usr/bin/node-22\nnode -e 'if (process.versions.node.split(\".\")[0] !== \"22\") process.exit(1)'\nsystemctl disable --now docker\ninstall -d /usr/local/lib/docker/cli-plugins\ncompose_version=v2.39.4\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/docker-compose-linux-x86_64\" -o /tmp/docker-compose-linux-x86_64\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/checksums.txt\" -o /tmp/checksums.txt\n(cd /tmp && grep -E ' [*]?docker-compose-linux-x86_64$' checksums.txt | sha256sum --check)\ninstall -m 755 /tmp/docker-compose-linux-x86_64 /usr/local/lib/docker/cli-plugins/docker-compose\nvolume_id=",
                 {
                   "Ref": "DataVolume"
                 },
-                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nif test -z \"$(lsblk -no FSTYPE \"$device\")\"; then mkfs -t ext4 \"$device\"; fi\ninstall -d /srv/framedash\nuuid=$(blkid -s UUID -o value \"$device\")\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,nofail 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\ninstall -d -m 700 /srv/framedash/data\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
+                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nif test -z \"$(lsblk -no FSTYPE \"$device\")\"; then mkfs -t ext4 \"$device\"; fi\ntest \"$(lsblk -no FSTYPE \"$device\")\" = ext4\ninstall -d /srv/framedash\nuuid=$(blkid -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
               ]
             ]
           }
@@ -506,32 +531,15 @@
           "must": [
             "Install the auto-stop timer before dependencies so setup failure remains bounded.",
             "Require IMDSv2 with a container-compatible hop limit.",
+            "Attach the existing data volume within this resource to avoid a signal/attachment dependency cycle.",
+            "Signal successful creation only after Node 22, the exact data mount and guarded Docker startup pass.",
+            "Docker must stop or refuse startup if the data mount disappears or its UUID changes.",
             "Use standard CPU credits and preserve termination protection."
           ]
         },
         "guard": {
           "SuppressedRules": [
             "EC2_INSTANCES_IN_VPC"
-          ]
-        }
-      }
-    },
-    "DataAttachment": {
-      "Type": "AWS::EC2::VolumeAttachment",
-      "Properties": {
-        "Device": "/dev/sdf",
-        "InstanceId": {
-          "Ref": "Instance"
-        },
-        "VolumeId": {
-          "Ref": "DataVolume"
-        }
-      },
-      "Metadata": {
-        "com.aws.cloudformation.Context": {
-          "why": "The recorded disk identity prevents mounting or formatting unrelated volumes.",
-          "must": [
-            "Attach the exact encrypted pilot data volume."
           ]
         }
       }
