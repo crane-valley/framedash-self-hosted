@@ -11,6 +11,7 @@ export function normalizeBootstrapAdminEmail(supplied) {
 	// The credentials form also rejects domain labels ending in a hyphen, which Zod accepts.
 	if (
 		email.length > 255 ||
+		(local?.length ?? 0) > 64 ||
 		extra !== undefined ||
 		!/^(?!\.)(?!.*\.\.)[A-Za-z0-9_'+\-.]*[A-Za-z0-9_+-]$/.test(local) ||
 		labels.length < 2 ||

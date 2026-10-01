@@ -68,15 +68,100 @@ configuration fields; Compose forwards them to the SDK containers. `configure.mj
 generates credentials for LocalStack only, and requires a separately configured local emulator.
 
 The default Amazon Linux 2023 bootstrap installs Node 22 and Docker. Stack creation waits up to
-30 minutes for the host's completion signal. Docker requires the data filesystem mounted at
+30 minutes for the host's completion signal. Bootstrap never formats a disk: after finding the
+exact data volume, it waits up to 20 minutes for an operator-created ext4 filesystem. An existing
+ext4 volume proceeds without formatting. Complete the initial-volume procedure below while the
+new stack is `CREATE_IN_PROGRESS`; do not wait for `CREATE_COMPLETE` before connecting.
+Docker requires the data filesystem mounted at
 `/srv/framedash` with its recorded UUID, including after a reboot. The retained S3 bucket keeps
 its policy denying insecure transport. These revised boot guards passed static and shell tests;
 a new AWS host creation or reboot was not performed after the test infrastructure was deleted.
+
+### Initial data-volume preparation
+
+On the account-verified operator workstation, identify the new stack and its exact physical
+`DataVolume` and `Instance` before connecting through Session Manager:
+
+```sh
+set -eu
+EXPECTED_ACCOUNT_ID=YOUR_12_DIGIT_ACCOUNT_ID
+AWS_REGION=YOUR_AWS_REGION
+STACK_ID=YOUR_NEW_STACK_ARN
+test "$(aws sts get-caller-identity --query Account --output text)" = "$EXPECTED_ACCOUNT_ID"
+aws cloudformation describe-stacks --region "$AWS_REGION" --stack-name "$STACK_ID" \
+  --query 'Stacks[0].{Id:StackId,Status:StackStatus,Created:CreationTime}'
+DATA_VOLUME_ID=$(aws cloudformation describe-stack-resource --region "$AWS_REGION" \
+  --stack-name "$STACK_ID" --logical-resource-id DataVolume \
+  --query StackResourceDetail.PhysicalResourceId --output text)
+INSTANCE_ID=$(aws cloudformation describe-stack-resource --region "$AWS_REGION" \
+  --stack-name "$STACK_ID" --logical-resource-id Instance \
+  --query StackResourceDetail.PhysicalResourceId --output text)
+aws ec2 describe-volumes --region "$AWS_REGION" --volume-ids "$DATA_VOLUME_ID" \
+  --query 'Volumes[].{Id:VolumeId,Created:CreateTime,Snapshot:SnapshotId,Attachments:Attachments,Tags:Tags}'
+aws ec2 describe-instances --region "$AWS_REGION" --instance-ids "$INSTANCE_ID" \
+  --query 'Reservations[].Instances[].{Id:InstanceId,Tags:Tags,Disks:BlockDeviceMappings}'
+```
+
+Proceed only for this initial stack creation: match its ARN account/Region, both resource tags
+and attachment to the recorded instance. Confirm the volume was newly created for this operation,
+has no snapshot source, has never held an installation and contains no data to preserve. An empty
+filesystem probe alone cannot prove that. Stop on an update/replacement, reused volume, unknown
+history or mismatch; preserve and investigate that disk instead.
+
+Connect to the recorded instance, run `sudo -i`, then use the recorded volume ID in this Bash
+inspection. No installer directory exists yet:
+
+```bash
+set -eu
+DATA_VOLUME_ID=YOUR_VERIFIED_NEW_DATA_VOLUME_ID
+udevadm settle --timeout=10
+DATA_DEVICE=$(readlink -f "/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_${DATA_VOLUME_ID//-/}")
+test -b "$DATA_DEVICE"
+test "$(lsblk -nr -o TYPE "$DATA_DEVICE")" = disk
+test -z "$(lsblk -nr -o MOUNTPOINTS "$DATA_DEVICE")"
+lsblk -b -o NAME,SERIAL,TYPE,SIZE,FSTYPE,MOUNTPOINTS "$DATA_DEVICE"
+wipefs --no-act "$DATA_DEVICE"
+file -s "$DATA_DEVICE"
+```
+
+Match the displayed serial to the recorded volume ID and size to the new stack's capacity.
+Require no partitions, mounts or signatures, and a `file` result of plain `data`, in addition to
+the verified fresh-volume history above. Only then explicitly run `mkfs.ext4 "$DATA_DEVICE"`
+without a force option. This erases any contents on that device. Never format an existing or
+uncertain volume. Bootstrap detects ext4, mounts it, starts Docker and signals completion;
+verify `CREATE_COMPLETE` before extracting the installer under `/srv/framedash` and following
+the configuration steps. If the window expires, inspect the failed stack and retained resources;
+do not format a volume to repair an unknown installation. See
+[AWS's volume preparation guidance](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-using-volumes.html).
+
+### Runtime configuration
 
 The host auto-stops eight hours after each boot by default. This is a runtime bound rather than
 a spending limit. EBS, retained buckets/queues and snapshots can still incur charges after a stop
 or stack deletion. The template deliberately retains data resources; inspect its retention policies
 and separately remove exact resources when ending a disposable trial.
+
+The default consumer polls only the main queue. Messages that exhaust its configured retries
+remain in the DLQ for operator diagnosis, subject to the template's 14-day SQS retention expiry.
+Monitor that queue and arrange any required preservation before expiry. Budget claims may remain
+held for failed messages. This preview does not provide or validate an automatic replay workflow.
+
+After diagnosing failures and reviewing the exact DLQ configured in `.env`, an authorized operator
+can explicitly discard its visible messages from the privileged installer shell:
+
+```sh
+node compose.mjs --configfile .env -- -f compose.yml -f compose.preview.yml \
+  run --rm --no-deps consumer node apps/self-hosted/dist/consumer.js --discard-dlq
+```
+
+This command polls only the configured DLQ. It invokes the shared terminal-failure handler,
+which logs diagnostic metadata, attempts budget rollback for decodable messages and acknowledges
+them even if rollback fails. Malformed envelopes are acknowledged without rollback. Acknowledged
+messages are deleted irreversibly. The command exits after an empty long poll; invisible or
+concurrently arriving messages can remain, so inspect the queue again and repeat only after review.
+Stopping the command drains its current batch. Retaining queues after stack deletion cannot restore
+expired or already acknowledged messages. Supported replay and longer retention require a separate
+reviewed recovery design.
 
 Generate a private configuration in the installer directory. These are public resource coordinates;
 use your approved administrator email. The generator creates passwords and privacy keys privately,

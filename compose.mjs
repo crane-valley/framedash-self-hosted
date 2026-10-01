@@ -22,9 +22,23 @@ export function composeInvocation(configfile, forwarded, shellEnvironment, setti
 	) {
 		throw new Error("Compose configuration rendering flags are not allowed");
 	}
+	const environment = { ...shellEnvironment };
+	// Omitted file settings must not inherit shell credentials, endpoints, or privacy recipients.
+	const fileOwnedOptionals = new Set([
+		"AWS_ACCESS_KEY_ID",
+		"AWS_SECRET_ACCESS_KEY",
+		"AWS_SESSION_TOKEN",
+		"S3_ENDPOINT",
+		"S3_FORCE_PATH_STYLE",
+		"SQS_ENDPOINT",
+		"SELF_HOSTED_PRIVACY_CONTACT",
+	]);
+	for (const key of Object.keys(environment)) {
+		if (fileOwnedOptionals.has(key.toUpperCase())) delete environment[key];
+	}
 	return {
 		arguments: ["compose", "--env-file", resolve(configfile), ...forwarded],
-		environment: { ...shellEnvironment, ...settings },
+		environment: { ...environment, ...settings },
 	};
 }
 

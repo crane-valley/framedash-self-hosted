@@ -39,8 +39,8 @@
     },
     "AllowedClientCidr": {
       "Type": "String",
-      "AllowedPattern": "^(?:[0-9]{1,3}\\.){3}[0-9]{1,3}/(?:[0-9]|[12][0-9]|3[0-2])$",
-      "Description": "Operator or office public CIDR allowed to use HTTPS. Do not use 0.0.0.0/0.",
+      "AllowedPattern": "^(?!0\\.0\\.0\\.0/0$)(?:(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])\\.){3}(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])/(?:[1-9]|[12][0-9]|3[0-2])$(?![\\s\\S])",
+      "Description": "Operator or office IPv4 CIDR allowed to use HTTPS, with prefix 1 through 32. All /0 CIDRs, including 0.0.0.0/0, are forbidden.",
       "Default": "127.0.0.1/32"
     },
     "InstanceType": {
@@ -104,9 +104,9 @@
       },
       "Metadata": {
         "com.aws.cloudformation.Context": {
-          "why": "Failed telemetry remains available for operator diagnosis and controlled replay.",
+          "why": "The default consumer leaves failed telemetry in the DLQ for operator diagnosis, subject to SQS retention expiry.",
           "must": [
-            "Preserve quarantined messages until an explicit replay or discard decision."
+            "Do not consume the DLQ automatically; explicit discard deletes acknowledged messages and retention expiry also removes them."
           ]
         }
       }
@@ -220,7 +220,7 @@
               ],
               "Condition": {
                 "Bool": {
-                  "aws:SecureTransport": false
+                  "aws:SecureTransport": "false"
                 }
               }
             }
@@ -423,7 +423,8 @@
           "why": "A separate persistent disk permits cold backup independently of disposable application images.",
           "must": [
             "Zone must match the selected subnet and instance.",
-            "Keep encryption and snapshot policies on deletion or replacement."
+            "Keep encryption and snapshot policies on deletion or replacement.",
+            "Bootstrap never formats disks. The operator must positively verify a newly created blank volume before its explicit initialization during the bounded bootstrap wait."
           ]
         }
       }
@@ -515,7 +516,7 @@
                 {
                   "Ref": "DataVolume"
                 },
-                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nif test -z \"$(lsblk -no FSTYPE \"$device\")\"; then mkfs -t ext4 \"$device\"; fi\ntest \"$(lsblk -no FSTYPE \"$device\")\" = ext4\ninstall -d /srv/framedash\nuuid=$(blkid -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
+                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nwait_for_data_filesystem() {\n  deadline=$((SECONDS + 1200))\n  udevadm settle --timeout=10\n  while ((SECONDS < deadline)); do\n    if filesystem=$(blkid --probe -s TYPE -o value \"$device\"); then\n      test \"$filesystem\" = ext4 || return 1\n      return 0\n    fi\n    sleep 5\n  done\n  return 1\n}\nprintf 'Waiting up to 20 minutes for operator-initialized ext4 on the exact data volume.\\n'\nwait_for_data_filesystem\ninstall -d /srv/framedash\nuuid=$(blkid --probe -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
               ]
             ]
           }
@@ -629,7 +630,7 @@
       "Value": {
         "Ref": "DeadLetterQueue"
       },
-      "Description": "Quarantined messages for controlled diagnosis and replay."
+      "Description": "Failed telemetry left unconsumed by default, subject to 14-day expiry; explicit discard is irreversible."
     },
     "StorageBucketName": {
       "Value": {

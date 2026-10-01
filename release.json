@@ -6,21 +6,21 @@
   "images": {
     "runtime": {
       "tag": "framedash-self-hosted-runtime:0.1.0-preview.1",
-      "id": "sha256:634eebf30507227d8c47eb51f6ccf33a51ebe136bd9235ccb9faa1aa2c95ddfb",
-      "configId": "sha256:084b2548bb322e25554a94a509e2c03206da8dced86d3a5a9b55629d36a91f7f"
+      "id": "sha256:eca0725496d9a869ffaff86f5b7bcbb796bcf23b6a4a22b1b550d3795a517638",
+      "configId": "sha256:e3626838d20bde0923f811270521afe0cbae03521129065f8d83710f267ec7ad"
     },
     "web": {
       "tag": "framedash-self-hosted-web:0.1.0-preview.1",
-      "id": "sha256:a04e512cb092b54a50b320d2b97270d421fb3202e3022b9cc66aa3be8643e91a",
-      "configId": "sha256:392dfcf0169ee2ad351b9b6fac8fdfc8321960b9408bfb3b4a31b15148e94d5d"
+      "id": "sha256:64cbf203e6ca567f8523e3bb02d67bd6454668459b4ff03a0df40dc5d30b03eb",
+      "configId": "sha256:cb006f7bc2943a8ee37381c243ea1e4d8e247bfd61fa9ce1754469d20f060d3e"
     }
   },
   "archive": {
     "filename": "framedash-images-0.1.0-preview.1.tar.gz",
-    "sha256": "f0c61768682c360d0f23c1044232da1a7965c6a54bc8f074f74abd8b773f474b"
+    "sha256": "8a38ecac97356f4db3157d3d3630dc8c077a2ec74e25550e3ed20b2a84d79ec1"
   },
   "baseSources": {
     "filename": "framedash-base-sources-0.1.0-preview.1.tar.gz",
-    "sha256": "b0a9fdfb40fa694b026d32055684b69e74055bba73ee9e30de850983b6f71308"
+    "sha256": "afb606990fb4cb3097f4078b56397a4f5aa1941d918628f6325e03809142db26"
   }
 }
