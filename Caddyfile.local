@@ -1,0 +1,17 @@
+:8088 {
+	@ingest path /v1/events /v1/events/*
+	handle @ingest {
+		reverse_proxy ingest:8080 {
+			header_up -CF-Connecting-IP
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+	handle {
+		reverse_proxy web:3000 {
+			header_up -CF-Connecting-IP
+			header_up X-Forwarded-For {remote_host}
+			header_up X-Real-IP {remote_host}
+		}
+	}
+}

@@ -1,0 +1,12 @@
+Framedash Self-hosted Preview
+Copyright 2026 Crane Valley
+
+Crane Valley is the licensor of the Framedash application artifacts and installer
+files distributed in this preview under Elastic License 2.0 (APP-LICENSE.txt).
+This grant covers only those published artifacts, not the private development
+repository or the separately operated Framedash SaaS service.
+
+Third-party components and Framedash components with an existing separate license
+retain their respective licenses. See THIRD-PARTY-NOTICES.md, the component license
+files and the notices packaged inside the application images. The bundled Framedash
+CLI retains its MIT license at packages/cli/LICENSE in the runtime image.
