@@ -14,6 +14,7 @@ export function normalizeBootstrapAdminEmail(supplied) {
 		extra !== undefined ||
 		!/^(?!\.)(?!.*\.\.)[A-Za-z0-9_'+\-.]*[A-Za-z0-9_+-]$/.test(local) ||
 		labels.length < 2 ||
+		labels.some((label) => label.length > 63) ||
 		!labels
 			.slice(0, -1)
 			.every((label) => /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label)) ||

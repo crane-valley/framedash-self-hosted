@@ -34,6 +34,7 @@ x-runtime: &runtime
     driver: json-file
     options: { max-size: 10m, max-file: "3" }
   environment: *common-env
+  pull_policy: never
 
 services:
   proxy:
@@ -58,6 +59,8 @@ services:
     environment:
       <<: *common-env
       FRAMEDASH_SELF_HOSTED: "true"
+      S3_ENDPOINT:
+      S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
       CLICKHOUSE_READONLY_URL: http://clickhouse:8123?user=framedash_readonly&password=${CLICKHOUSE_READONLY_PASSWORD:?Run
         configure.mjs}
       AUTH_URL: ${APP_URL}
@@ -79,6 +82,7 @@ services:
       redis-http:
         condition: service_started
     mem_limit: 2g
+    pull_policy: never
 
   ingest:
     <<: *runtime

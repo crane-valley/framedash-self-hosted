@@ -24,7 +24,17 @@ const required = (name, fallback) => {
 };
 const region = required("region", local ? "us-east-1" : undefined);
 const domain = required("domain", test ? "localhost:8088" : undefined);
-if (!test && !/^[a-zA-Z0-9.-]+$/.test(domain)) throw new Error("--domain must be a DNS name");
+if (
+	!test &&
+	(domain.length > 253 ||
+		!domain
+			.split(".")
+			.every(
+				(label) => label.length <= 63 && /^[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?$/.test(label),
+			))
+) {
+	throw new Error("--domain must be a DNS name");
+}
 const here = dirname(fileURLToPath(import.meta.url));
 const dataDirOption = required("data-dir", local ? resolve(here, ".data") : "/srv/framedash/data");
 const dataDir =
@@ -81,6 +91,8 @@ const settings = {
 };
 if (local) {
 	settings.SQS_ENDPOINT = "http://localstack:4566";
+	settings.S3_ENDPOINT = "http://localstack:4566";
+	settings.S3_FORCE_PATH_STYLE = "true";
 	settings.AWS_ACCESS_KEY_ID = secret("localstack-access-key-id", 10);
 	settings.AWS_SECRET_ACCESS_KEY = secret("localstack-secret-access-key");
 }
