@@ -18,6 +18,12 @@ Docker Engine and Docker Compose 2.39.4 or newer. The initial preview requires a
 filesystem and a single host with enough memory for ClickHouse, databases and the dashboard;
 the AWS test used 16 GiB. No supported ARM or multi-host deployment is provided.
 
+The shipped installer disables external web telemetry. Browser Sentry is disabled at build time
+and cannot be enabled through runtime configuration. The internal runtime
+`SELF_HOSTED_TELEMETRY_ENABLED` flag controls server/edge Sentry and optional dashboard collectors;
+changing it does not change the compiled browser Sentry or build-plugin settings. Custom telemetry
+opt-in is not a supported path for this binary preview. Keep the shipped disabled settings.
+
 On the default AWS host, Session Manager opens a shell as `ssm-user`, which is not in the
 Docker group. Before any Docker, Compose or host-maintenance commands in this guide, enter
 an authorized root shell and change to the extracted installer directory:
