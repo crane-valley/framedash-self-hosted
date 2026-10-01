@@ -143,7 +143,15 @@ do not format a volume to repair an unknown installation. See
 ### Runtime configuration
 
 The host auto-stops eight hours after each boot by default. This is a runtime bound rather than
-a spending limit. EBS, retained buckets/queues and snapshots can still incur charges after a stop
+a spending limit. `AutoStopHours` configures the timer only during initial host bootstrap.
+Changing it on an existing stack does not update the installed timer: EC2 user data is not
+automatically rerun after an update or stop/start. Keep its original value during stack updates.
+Changing an existing host's runtime limit requires separately reviewed privileged timer maintenance;
+that workflow is not supported or tested by this preview. Inspect the installed unit with
+`systemctl cat framedash-autostop.timer` and its next deadline with
+`systemctl list-timers --all framedash-autostop.timer` before relying on a runtime limit. See
+[EC2 user-data execution](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/user-data.html).
+EBS, retained buckets/queues and snapshots can still incur charges after a stop
 or stack deletion. The template deliberately retains data resources; inspect its retention policies
 and separately remove exact resources when ending a disposable trial.
 
@@ -286,14 +294,14 @@ the intended target before continuing. Disable protection only on that recorded 
 
 ```sh
 aws ec2 modify-instance-attribute --region "$AWS_REGION" --instance-id "$INSTANCE_ID" \
-  --no-disable-api-termination
+  --attribute disableApiTermination --value false
 ```
 
 For replacement, review the CloudFormation change set before executing it; the replacement
 instance receives termination protection from the template. An existing attached data disk
 needs an operator-managed detach/reattach and recovery plan, so host replacement is not an
 automatic preview upgrade. If the operation is canceled and the original instance survives,
-restore its protection with the same command using `--disable-api-termination`.
+restore its protection with the same command using `--attribute disableApiTermination --value true`.
 
 For disposal, separately disable CloudFormation stack termination protection if the earlier
 inspection reports it enabled, then delete only the reviewed stack:

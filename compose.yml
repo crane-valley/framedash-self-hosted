@@ -25,20 +25,23 @@ x-common-env: &common-env
   ERASURE_SUPPRESSION_HASH_SECRET: ${ERASURE_SUPPRESSION_HASH_SECRET:?Run configure.mjs}
   PLAYER_ERASURE_ENCRYPTION_KEY: ${PLAYER_ERASURE_ENCRYPTION_KEY:?Run configure.mjs}
 
+x-logging: &logging
+  driver: json-file
+  options: { max-size: 10m, max-file: "3" }
+
 x-runtime: &runtime
   image: framedash-self-hosted-runtime:0.1.0-preview.1
   restart: unless-stopped
   stop_grace_period: 3m
   networks: [ backend ]
-  logging:
-    driver: json-file
-    options: { max-size: 10m, max-file: "3" }
+  logging: *logging
   environment: *common-env
   pull_policy: never
 
 services:
   proxy:
     image: caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+    logging: *logging
     restart: unless-stopped
     ports: [ "80:80", "443:443" ]
     environment:
@@ -55,6 +58,7 @@ services:
 
   web:
     image: framedash-self-hosted-web:0.1.0-preview.1
+    logging: *logging
     restart: unless-stopped
     environment:
       <<: *common-env
@@ -147,6 +151,7 @@ services:
 
   postgres:
     image: postgres@sha256:97ff59a4e30e08d1c11bdcd9455e7832368c0572b576c9092cde2df4ae5552a3
+    logging: *logging
     restart: unless-stopped
     environment:
       POSTGRES_USER: framedash
@@ -164,6 +169,7 @@ services:
 
   clickhouse:
     image: clickhouse/clickhouse-server@sha256:b20a07891b9051db5b97c5d64cd0c7b7f2b50213baedaaac7c526e963447da89
+    logging: *logging
     restart: unless-stopped
     environment:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
@@ -189,6 +195,7 @@ services:
 
   redis:
     image: redis@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
+    logging: *logging
     restart: unless-stopped
     command:
       [
@@ -210,6 +217,7 @@ services:
 
   redis-http:
     image: hiett/serverless-redis-http@sha256:65128347949bca511e448fd7238780d624573d74c22b79155a7563db19e9b678
+    logging: *logging
     restart: unless-stopped
     environment:
       SRH_MODE: env

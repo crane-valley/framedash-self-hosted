@@ -72,7 +72,8 @@
         8,
         12,
         24
-      ]
+      ],
+      "Description": "Initial host-bootstrap timer setting. Updating this parameter does not update the installed timer on an existing host."
     },
     "EnablePublicHttps": {
       "Type": "String",
