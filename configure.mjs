@@ -5,11 +5,36 @@ import { fileURLToPath } from "node:url";
 import { normalizeBootstrapAdminEmail, resolveBootstrapNames } from "./bootstrap.mjs";
 import { configSecretBytes } from "./config-secrets.mjs";
 
+const valueOptions = new Set(
+	[
+		"region",
+		"domain",
+		"data-dir",
+		"queue-url",
+		"dlq-url",
+		"bucket",
+		"smtp-url",
+		"email-from",
+		"admin-email",
+		"output",
+		"admin-name",
+		"workspace-name",
+		"workspace-slug",
+		"project-name",
+		"sdk-api-key-name",
+	].map((name) => `--${name}`),
+);
 const options = new Map();
 for (let i = 2; i < process.argv.length; i++) {
-	const name = process.argv[i];
-	if (name === "--local" || name === "--aws-test") options.set(name, "true");
-	else if (name.startsWith("--") && process.argv[i + 1]) options.set(name, process.argv[++i]);
+	const argument = process.argv[i];
+	const equals = argument.indexOf("=");
+	const name = equals > 0 ? argument.slice(0, equals) : argument;
+	const value = process.argv[i + 1];
+	if (equals < 0 && (name === "--local" || name === "--aws-test")) options.set(name, "true");
+	else if (equals > 0 && valueOptions.has(name)) options.set(name, argument.slice(equals + 1));
+	// A dash-prefixed value needs the equals form so a missing value cannot swallow the next flag.
+	else if (valueOptions.has(name) && value && !value.startsWith("--"))
+		options.set(name, process.argv[++i]);
 	else throw new Error(`Invalid option: ${name}`);
 }
 const local = options.has("--local");

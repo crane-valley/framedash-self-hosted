@@ -50,7 +50,7 @@
         "t3.large",
         "t3.xlarge"
       ],
-      "Description": "One instance only. t3.xlarge has 16 GiB for image builds; t3.large is an optional cheaper runtime test."
+      "Description": "One instance only. t3.xlarge has 16 GiB, the tested runtime size; t3.large is an optional cheaper runtime test."
     },
     "DataVolumeSize": {
       "Type": "Number",
@@ -82,6 +82,12 @@
         "true",
         "false"
       ]
+    },
+    "NoncurrentVersionRetentionDays": {
+      "Type": "String",
+      "Default": "0",
+      "AllowedPattern": "^(0|[1-9][0-9]{0,3})$(?![\\s\\S])",
+      "Description": "Whole days S3 keeps replaced or deleted object versions before permanent expiry; 0 keeps them indefinitely. Enabling expiry also deletes existing versions older than this."
     }
   },
   "Conditions": {
@@ -91,6 +97,18 @@
           "Ref": "EnablePublicHttps"
         },
         "true"
+      ]
+    },
+    "ExpireNoncurrentVersions": {
+      "Fn::Not": [
+        {
+          "Fn::Equals": [
+            {
+              "Ref": "NoncurrentVersionRetentionDays"
+            },
+            "0"
+          ]
+        }
       ]
     }
   },
@@ -179,6 +197,24 @@
               "AbortIncompleteMultipartUpload": {
                 "DaysAfterInitiation": 7
               }
+            },
+            {
+              "Fn::If": [
+                "ExpireNoncurrentVersions",
+                {
+                  "Id": "ExpireNoncurrentVersions",
+                  "Status": "Enabled",
+                  "NoncurrentVersionExpiration": {
+                    "NoncurrentDays": {
+                      "Ref": "NoncurrentVersionRetentionDays"
+                    }
+                  },
+                  "ExpiredObjectDeleteMarker": true
+                },
+                {
+                  "Ref": "AWS::NoValue"
+                }
+              ]
             }
           ]
         }
@@ -188,7 +224,7 @@
           "why": "Uploaded assets survive application-host loss without exposing data publicly.",
           "must": [
             "Keep encryption and public-access blocking.",
-            "Retain versions until the operator completes recovery or data-disposal review."
+            "Keep noncurrent-version expiry opt-in: a new lifecycle rule also expires versions already in an upgraded bucket."
           ]
         }
       }
@@ -435,7 +471,7 @@
       "CreationPolicy": {
         "ResourceSignal": {
           "Count": 1,
-          "Timeout": "PT30M"
+          "Timeout": "PT45M"
         }
       },
       "Properties": {
@@ -513,11 +549,11 @@
                   "Ref": "AutoStopHours"
                 },
                 "h\nUnit=framedash-autostop.service\n[Install]\nWantedBy=timers.target\nEOF\nsystemctl daemon-reload\nsystemctl enable --now framedash-autostop.timer\n",
-                "dnf install -y aws-cfn-bootstrap docker git nodejs22 nodejs22-npm\nalternatives --set node /usr/bin/node-22\nnode -e 'if (process.versions.node.split(\".\")[0] !== \"22\") process.exit(1)'\nsystemctl disable --now docker\ninstall -d /usr/local/lib/docker/cli-plugins\ncompose_version=v2.39.4\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/docker-compose-linux-x86_64\" -o /tmp/docker-compose-linux-x86_64\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/checksums.txt\" -o /tmp/checksums.txt\n(cd /tmp && grep -E ' [*]?docker-compose-linux-x86_64$' checksums.txt | sha256sum --check)\ninstall -m 755 /tmp/docker-compose-linux-x86_64 /usr/local/lib/docker/cli-plugins/docker-compose\nvolume_id=",
+                "dnf install -y aws-cfn-bootstrap docker git nodejs22 nodejs22-npm\nalternatives --set node /usr/bin/node-22\nnode -e 'if (process.versions.node.split(\".\")[0] !== \"22\") process.exit(1)'\nsystemctl disable --now docker\ninstall -d /usr/local/lib/docker/cli-plugins\ncompose_version=v2.39.4\ncompose_sha256=7af95166a730b87e172d4fc9aefea8725d3c6c7327d59149267b452114ddb7d4\ncurl --fail --location \"https://github.com/docker/compose/releases/download/$compose_version/docker-compose-linux-x86_64\" -o /tmp/docker-compose-linux-x86_64\necho \"$compose_sha256  /tmp/docker-compose-linux-x86_64\" | sha256sum --check\ninstall -m 755 /tmp/docker-compose-linux-x86_64 /usr/local/lib/docker/cli-plugins/docker-compose\nvolume_id=",
                 {
                   "Ref": "DataVolume"
                 },
-                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nwait_for_data_filesystem() {\n  deadline=$((SECONDS + 1200))\n  udevadm settle --timeout=10\n  while ((SECONDS < deadline)); do\n    if filesystem=$(blkid --probe -s TYPE -o value \"$device\"); then\n      test \"$filesystem\" = ext4 || return 1\n      return 0\n    fi\n    sleep 5\n  done\n  return 1\n}\nprintf 'Waiting up to 20 minutes for operator-initialized ext4 on the exact data volume.\\n'\nwait_for_data_filesystem\ninstall -d /srv/framedash\nuuid=$(blkid --probe -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
+                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nwait_for_data_filesystem() {\n  deadline=$((SECONDS + 1200))\n  udevadm settle --timeout=10\n  while ((SECONDS < deadline)); do\n    if filesystem=$(blkid --probe -s TYPE -o value \"$device\"); then\n      test \"$filesystem\" = ext4 || return 1\n      return 0\n    fi\n    sleep 5\n  done\n  return 1\n}\nprintf 'Waiting up to 20 minutes for operator-initialized ext4 on the exact data volume.\\n'\nwait_for_data_filesystem\ninstall -d /srv/framedash\nuuid=$(blkid --probe -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,nofail,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
               ]
             ]
           }

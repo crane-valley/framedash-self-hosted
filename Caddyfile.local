@@ -1,4 +1,7 @@
 :8088 {
+	request_body {
+		max_size 12MB
+	}
 	@ingest path /v1/events /v1/events/*
 	handle @ingest {
 		reverse_proxy ingest:8080 {
