@@ -7,6 +7,16 @@ It is an experimental preview. Read `APP-LICENSE.txt` before using the applicati
 files and application images, including executable JavaScript. The private original development
 repository is not distributed.
 
+Installation overview:
+
+1. Check the requirements below and, on AWS, optionally create the host with
+   `aws/cloudformation.json` and prepare its data volume.
+2. Download and verify the release archives, extract the installer and load the images.
+3. Generate the private configuration with `configure.mjs`, start the services with
+   `compose.mjs` and run the one-time bootstrap (see "Runtime configuration").
+4. Sign in, rotate the generated administrator password and point the SDK at `/v1/events`.
+5. Review the checks, update and backup guidance before storing data you need to keep.
+
 ## Release and requirements
 
 `release.json` records the exact version, `linux/amd64` application image names, source image IDs
@@ -40,7 +50,17 @@ use your installation administrator's approved privileged access. See
 
 Download the installer, image archive, corresponding-source archive and `ASSET_SHA256SUMS.txt`
 from the same reviewed release. Verify the downloaded archives with
-`sha256sum --check ASSET_SHA256SUMS.txt`, then extract the installer.
+`sha256sum --check ASSET_SHA256SUMS.txt`, then extract the installer into its own directory
+without applying archive ownership or permissions, and change into it:
+
+```sh
+tar --extract --gzip --no-same-owner --no-same-permissions \
+  --file framedash-installer-VERSION.tar.gz
+cd framedash-installer-VERSION
+```
+
+The installer archive contains a single `framedash-installer-VERSION/` directory whose
+root-owned entries carry no group or other write permission.
 `release.json` identifies the source archive under `baseSources`; it provides the exact
 Debian source packages used by the application base images and the bundled native-library
 sources and build recipes. Place both archives
@@ -73,15 +93,24 @@ when using the instance role. Off AWS, supply your reviewed credentials privatel
 configuration fields; Compose forwards them to the SDK containers. `configure.mjs --local`
 generates credentials for LocalStack only, and requires a separately configured local emulator.
 
-The default Amazon Linux 2023 bootstrap installs Node 22 and Docker. Stack creation waits up to
-30 minutes for the host's completion signal. Bootstrap never formats a disk: after finding the
+The default Amazon Linux 2023 bootstrap installs Node 22 and Docker, verifying the Docker Compose
+plugin against a SHA-256 pinned in the template. Stack creation waits up to 45 minutes for the
+host's completion signal. Bootstrap never formats a disk: after finding the
 exact data volume, it waits up to 20 minutes for an operator-created ext4 filesystem. An existing
 ext4 volume proceeds without formatting. Complete the initial-volume procedure below while the
 new stack is `CREATE_IN_PROGRESS`; do not wait for `CREATE_COMPLETE` before connecting.
 Docker requires the data filesystem mounted at
-`/srv/framedash` with its recorded UUID, including after a reboot. The retained S3 bucket keeps
-its policy denying insecure transport. These revised boot guards passed static and shell tests;
-a new AWS host creation or reboot was not performed after the test infrastructure was deleted.
+`/srv/framedash` with its recorded UUID, including after a reboot. On hosts created from this
+template, a missing data disk does not block boot (`nofail`), so Session Manager remains available
+for recovery while Docker refuses to start. A stack update does not rerun user data: a host
+created from an earlier template keeps its blocking entry until an operator adds `nofail` to the
+options of its `/srv/framedash` line in `/etc/fstab` and confirms `findmnt --verify` succeeds.
+The retained S3 bucket keeps its policy denying insecure transport. By default it keeps replaced
+and deleted object versions indefinitely. Setting `NoncurrentVersionRetentionDays` above zero
+expires them after that many days; on an existing bucket this immediately makes older versions
+eligible for permanent deletion, so back up or inventory any versions you need first.
+These revised boot guards passed static and shell tests; a new AWS host creation or reboot was
+not performed after the test infrastructure was deleted.
 
 ### Initial data-volume preparation
 
@@ -139,6 +168,13 @@ verify `CREATE_COMPLETE` before extracting the installer under `/srv/framedash` 
 the configuration steps. If the window expires, inspect the failed stack and retained resources;
 do not format a volume to repair an unknown installation. See
 [AWS's volume preparation guidance](https://docs.aws.amazon.com/ebs/latest/userguide/ebs-using-volumes.html).
+
+A failed creation signal makes CloudFormation roll back, and the instance's termination
+protection stops that rollback from deleting it: the stack reaches `ROLLBACK_FAILED` and the
+host keeps running. From the account-verified workstation, record the stack and instance as
+above, disable protection only on that recorded instance with the `modify-instance-attribute`
+command under "AWS replacement and disposal", then run `delete-stack` for the recorded stack.
+The data volume is snapshotted and the bucket and queues are retained as described there.
 
 ### Runtime configuration
 
@@ -208,8 +244,10 @@ remain private to Docker. The reserved proxy IP and Compose subnet must not over
 Bootstrap creates one verified administrator, workspace and project only on an empty instance.
 It refuses to modify an existing installation. Terms acceptance remains in the administrator's
 sign-in flow. Sign in using `ADMIN_EMAIL` and `ADMIN_PASSWORD` from your private configuration;
-the generator does not print the password. Bootstrap prints the new project ID. The generated
-`SDK_API_KEY` is restricted to event ingestion. Point the SDK at your instance's `/v1/events`
+the generator does not print the password. After the first sign-in, set a new password through
+the sign-in page's password-reset flow; the generated value stays in the configuration file,
+which Compose still reads, and stops granting access. Bootstrap prints the new project ID.
+The generated `SDK_API_KEY` is restricted to event ingestion. Point the SDK at your instance's `/v1/events`
 endpoint and use that project ID and key through your approved secret mechanism.
 
 For the separately published Framedash CLI, select this instance explicitly with
@@ -222,11 +260,13 @@ Optional labels `ADMIN_NAME`, `WORKSPACE_NAME`, `WORKSPACE_SLUG`, `PROJECT_NAME`
 and `SDK_API_KEY_NAME` can be set in the private file before bootstrap. Store that file with mode
 0600 and encrypted backups; restrict ACLs separately on Windows. Do not publish it, print container
 environments or render `compose config` without `--quiet`. `compose.mjs` gives file settings priority
-over shell settings and suppresses detailed Docker stderr; use status checks for recorded diagnostics.
+over shell settings and shows Docker stderr with configured secret values, inherited secret
+variables and URL credentials replaced by `[REDACTED]`. Its normal output is not redacted.
 
-For agent-operated configuration, follow the owner's secret-management policy. An optional
-`FRAMEDASH_CONFIG_SEED` may be supplied only inside an `asm-exec` child using a Secrets Manager
-dynamic reference, for example `{{resolve:secretsmanager:YOUR_SECRET:SecretString:configSeed}}`.
+For automated configuration, follow the owner's secret-management policy. An optional
+`FRAMEDASH_CONFIG_SEED` may be supplied only to the `configure.mjs` child process by a
+secret-injection wrapper that resolves it from your secret store, for example a Secrets Manager
+value such as `{{resolve:secretsmanager:YOUR_SECRET:SecretString:configSeed}}`.
 The seed must be 64 alphanumeric characters. Retain the original seed or generated privacy keys
 for recovery; changing them can prevent decryption and break audit continuity. Never place the
 resolved seed in command arguments, recorded logs or SSM parameters.
@@ -372,7 +412,8 @@ extended; the maintenance snapshot also incurs storage charges. See
 and [EBS pricing](https://aws.amazon.com/ebs/pricing/).
 
 Local restoration was tested for PostgreSQL, ClickHouse and Redis only. This release does not claim
-AWS disaster recovery, S3-version erasure, queue replay or durable erasure replay coverage. Mailpit
+AWS disaster recovery, queue replay or durable erasure replay coverage. The application does not
+erase S3 versions; only the optional noncurrent-version expiry or an operator does. Mailpit
 was used for email tests; real SMTP delivery, enterprise SSO, public DNS/TLS, browser rendering,
 long-duration operation and load limits remain unverified. The included HTTPS Caddy configuration
 is a deployment reference; the loopback preview remains the tested route. In particular, the optional

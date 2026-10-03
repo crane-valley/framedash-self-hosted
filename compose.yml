@@ -30,7 +30,7 @@ x-logging: &logging
   options: { max-size: 10m, max-file: "3" }
 
 x-runtime: &runtime
-  image: framedash-self-hosted-runtime:0.1.0-preview.2
+  image: framedash-self-hosted-runtime:0.1.0-preview.3
   restart: unless-stopped
   stop_grace_period: 3m
   networks: [ backend ]
@@ -57,7 +57,7 @@ services:
     mem_limit: 256m
 
   web:
-    image: framedash-self-hosted-web:0.1.0-preview.2
+    image: framedash-self-hosted-web:0.1.0-preview.3
     logging: *logging
     restart: unless-stopped
     environment:
@@ -201,7 +201,8 @@ services:
       [
         sh,
         -c,
-        'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"'
+        'exec redis-server --appendonly yes --maxmemory 192mb
+          --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"'
       ]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Run configure.mjs}
@@ -213,7 +214,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    mem_limit: 256m
+    mem_limit: 512m
 
   redis-http:
     image: hiett/serverless-redis-http@sha256:65128347949bca511e448fd7238780d624573d74c22b79155a7563db19e9b678
