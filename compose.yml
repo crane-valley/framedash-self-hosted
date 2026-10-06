@@ -30,7 +30,7 @@ x-logging: &logging
   options: { max-size: 10m, max-file: "3" }
 
 x-runtime: &runtime
-  image: framedash-self-hosted-runtime:0.1.0-preview.3
+  image: framedash-self-hosted-runtime:0.1.0-preview.4
   restart: unless-stopped
   stop_grace_period: 3m
   networks: [ backend ]
@@ -57,7 +57,7 @@ services:
     mem_limit: 256m
 
   web:
-    image: framedash-self-hosted-web:0.1.0-preview.3
+    image: framedash-self-hosted-web:0.1.0-preview.4
     logging: *logging
     restart: unless-stopped
     environment:
