@@ -1,8 +1,8 @@
-Framedash Self-hosted Preview
+Framedash Self-hosted
 Copyright 2026 Crane Valley
 
 Crane Valley is the licensor of the Framedash application artifacts and installer
-files distributed in this preview under Elastic License 2.0 (APP-LICENSE.txt).
+files distributed in this release under Elastic License 2.0 (APP-LICENSE.txt).
 This grant covers only those published artifacts, not the private development
 repository or the separately operated Framedash SaaS service.
 

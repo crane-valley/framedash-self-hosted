@@ -16,7 +16,7 @@
       "ref": [
         {
           "at": "README.md",
-          "has": "Preview setup and limitations",
+          "has": "Setup and limitations",
           "scope": "local"
         }
       ]
@@ -83,11 +83,111 @@
         "false"
       ]
     },
+    "EnableAlb": {
+      "Type": "String",
+      "Default": "false",
+      "AllowedValues": [
+        "true",
+        "false"
+      ],
+      "Description": "Serve HTTPS through an Application Load Balancer with an ACM certificate instead of the loopback-only route. Mutually exclusive with EnablePublicHttps."
+    },
+    "AlbScheme": {
+      "Type": "String",
+      "Default": "internal",
+      "AllowedValues": [
+        "internal",
+        "internet-facing"
+      ],
+      "Description": "internal needs an existing VPN or private route from every client device; internet-facing still admits only AllowedClientCidr."
+    },
+    "AlbCertificateArn": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^arn:aws[a-z-]*:acm:[a-z0-9-]+:[0-9]{12}:certificate/[0-9a-f-]{36}$(?![\\s\\S])",
+      "Description": "Required with EnableAlb. An ACM-issued, DNS-validated certificate in this Region renews automatically; imported certificates do not."
+    },
+    "AlbSecondSubnetId": {
+      "Type": "String",
+      "Default": "",
+      "AllowedPattern": "^$|^subnet-(?:[0-9a-f]{8}|[0-9a-f]{17})$(?![\\s\\S])",
+      "Description": "Required with EnableAlb. A second subnet of VpcId in a different Availability Zone; the ALB also uses PublicSubnetId so the host zone is always enabled."
+    },
     "NoncurrentVersionRetentionDays": {
       "Type": "String",
       "Default": "0",
       "AllowedPattern": "^(0|[1-9][0-9]{0,3})$(?![\\s\\S])",
       "Description": "Whole days S3 keeps replaced or deleted object versions before permanent expiry; 0 keeps them indefinitely. Enabling expiry also deletes existing versions older than this."
+    }
+  },
+  "Rules": {
+    "AlbInputs": {
+      "RuleCondition": {
+        "Fn::Equals": [
+          {
+            "Ref": "EnableAlb"
+          },
+          "true"
+        ]
+      },
+      "Assertions": [
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AlbCertificateArn"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "EnableAlb requires AlbCertificateArn."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AlbSecondSubnetId"
+                  },
+                  ""
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "EnableAlb requires AlbSecondSubnetId."
+        },
+        {
+          "Assert": {
+            "Fn::Equals": [
+              {
+                "Ref": "EnablePublicHttps"
+              },
+              "false"
+            ]
+          },
+          "AssertDescription": "EnableAlb and EnablePublicHttps are mutually exclusive."
+        },
+        {
+          "Assert": {
+            "Fn::Not": [
+              {
+                "Fn::Equals": [
+                  {
+                    "Ref": "AllowedClientCidr"
+                  },
+                  "127.0.0.1/32"
+                ]
+              }
+            ]
+          },
+          "AssertDescription": "EnableAlb requires the office or VPN CIDR in AllowedClientCidr."
+        }
+      ]
     }
   },
   "Conditions": {
@@ -109,6 +209,14 @@
             "0"
           ]
         }
+      ]
+    },
+    "Alb": {
+      "Fn::Equals": [
+        {
+          "Ref": "EnableAlb"
+        },
+        "true"
       ]
     }
   },
@@ -553,7 +661,7 @@
                 {
                   "Ref": "DataVolume"
                 },
-                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nwait_for_data_filesystem() {\n  deadline=$((SECONDS + 1200))\n  udevadm settle --timeout=10\n  while ((SECONDS < deadline)); do\n    if filesystem=$(blkid --probe -s TYPE -o value \"$device\"); then\n      test \"$filesystem\" = ext4 || return 1\n      return 0\n    fi\n    sleep 5\n  done\n  return 1\n}\nprintf 'Waiting up to 20 minutes for operator-initialized ext4 on the exact data volume.\\n'\nwait_for_data_filesystem\ninstall -d /srv/framedash\nuuid=$(blkid --probe -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,nofail,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nsystemctl daemon-reload\nsystemctl enable --now docker\ndocker info > /dev/null\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
+                "\nvolume_serial=${volume_id//-/}\ndevice=/dev/disk/by-id/nvme-Amazon_Elastic_Block_Store_$volume_serial\nfor attempt in $(seq 1 120); do\n  test -b \"$device\" && break\n  sleep 5\ndone\ntest -b \"$device\"\nwait_for_data_filesystem() {\n  deadline=$((SECONDS + 1200))\n  udevadm settle --timeout=10\n  while ((SECONDS < deadline)); do\n    if filesystem=$(blkid --probe -s TYPE -o value \"$device\"); then\n      test \"$filesystem\" = ext4 || return 1\n      return 0\n    fi\n    sleep 5\n  done\n  return 1\n}\nprintf 'Waiting up to 20 minutes for operator-initialized ext4 on the exact data volume.\\n'\nwait_for_data_filesystem\ninstall -d /srv/framedash\nuuid=$(blkid --probe -s UUID -o value \"$device\")\ntest -n \"$uuid\"\ngrep -q \"$uuid\" /etc/fstab || printf 'UUID=%s /srv/framedash ext4 defaults,nofail,x-systemd.device-timeout=120s 0 2\\n' \"$uuid\" >> /etc/fstab\nmount /srv/framedash\nprintf '#!/bin/bash\\nset -euo pipefail\\nmountpoint -q /srv/framedash\\ntest \"$(findmnt -rn -o UUID --mountpoint /srv/framedash)\" = \"%s\"\\n' \"$uuid\" > /usr/local/sbin/framedash-data-ready\nchmod 755 /usr/local/sbin/framedash-data-ready\n/usr/local/sbin/framedash-data-ready\ninstall -d /etc/systemd/system/docker.service.d\ncat > /etc/systemd/system/docker.service.d/framedash-data.conf <<'EOF'\n[Unit]\nRequiresMountsFor=/srv/framedash\nBindsTo=srv-framedash.mount\nAfter=srv-framedash.mount\n[Service]\nExecStartPre=/usr/local/sbin/framedash-data-ready\nEOF\ninstall -d -m 700 /srv/framedash/data\nif test ! -e /etc/docker/daemon.json; then\n  test -z \"$(ls -A /var/lib/docker 2>/dev/null)\"\n  install -d -m 711 /srv/framedash/docker\n  install -d -m 755 /etc/docker\n  printf '{\"data-root\":\"/srv/framedash/docker\"}\\n' > /etc/docker/daemon.json\nfi\nsystemctl daemon-reload\nsystemctl enable --now docker\ntest \"$(docker info --format '{{.DockerRootDir}}')\" = /srv/framedash/docker\nprintf 'Framedash infrastructure ready; application installation and secret configuration are manual.\\n'\n"
               ]
             ]
           }
@@ -572,7 +680,8 @@
             "Attach the existing data volume within this resource to avoid a signal/attachment dependency cycle.",
             "Signal successful creation only after Node 22, the exact data mount and guarded Docker startup pass.",
             "Docker must stop or refuse startup if the data mount disappears or its UUID changes.",
-            "Use standard CPU credits and preserve termination protection."
+            "Use standard CPU credits and preserve termination protection.",
+            "Place Docker's data root on the data volume before Docker first starts; never move an existing data root."
           ]
         },
         "guard": {
@@ -616,6 +725,204 @@
           "why": "DNS must continue to identify the nominated application host after a stop/start.",
           "must": [
             "Keep the address attached only to this stack instance."
+          ]
+        }
+      }
+    },
+    "AlbSecurityGroup": {
+      "Type": "AWS::EC2::SecurityGroup",
+      "Condition": "Alb",
+      "Properties": {
+        "GroupDescription": "Framedash ALB HTTPS from the nominated client CIDR.",
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "SecurityGroupIngress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 443,
+            "ToPort": 443,
+            "CidrIp": {
+              "Ref": "AllowedClientCidr"
+            }
+          }
+        ],
+        "SecurityGroupEgress": [
+          {
+            "IpProtocol": "tcp",
+            "FromPort": 8088,
+            "ToPort": 8088,
+            "DestinationSecurityGroupId": {
+              "Ref": "SecurityGroup"
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "Client devices reach only the TLS listener; the ALB reaches only the instance proxy port.",
+          "must": [
+            "HTTPS ingress stays scoped to AllowedClientCidr; never /0.",
+            "No plain HTTP listener or ingress."
+          ]
+        }
+      }
+    },
+    "InstanceIngressFromAlb": {
+      "Type": "AWS::EC2::SecurityGroupIngress",
+      "Condition": "Alb",
+      "Properties": {
+        "GroupId": {
+          "Ref": "SecurityGroup"
+        },
+        "IpProtocol": "tcp",
+        "FromPort": 8088,
+        "ToPort": 8088,
+        "SourceSecurityGroupId": {
+          "Ref": "AlbSecurityGroup"
+        }
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "A separate ingress resource avoids a security-group reference cycle.",
+          "must": [
+            "The instance proxy port accepts only the ALB security group."
+          ]
+        }
+      }
+    },
+    "LoadBalancer": {
+      "Type": "AWS::ElasticLoadBalancingV2::LoadBalancer",
+      "Condition": "Alb",
+      "Properties": {
+        "Type": "application",
+        "Scheme": {
+          "Ref": "AlbScheme"
+        },
+        "IpAddressType": "ipv4",
+        "Subnets": [
+          {
+            "Ref": "PublicSubnetId"
+          },
+          {
+            "Ref": "AlbSecondSubnetId"
+          }
+        ],
+        "SecurityGroups": [
+          {
+            "Ref": "AlbSecurityGroup"
+          }
+        ],
+        "LoadBalancerAttributes": [
+          {
+            "Key": "routing.http.xff_header_processing.mode",
+            "Value": "append"
+          },
+          {
+            "Key": "routing.http.drop_invalid_header_fields.enabled",
+            "Value": "true"
+          },
+          {
+            "Key": "routing.http.x_amzn_tls_version_and_cipher_suite.enabled",
+            "Value": "false"
+          },
+          {
+            "Key": "idle_timeout.timeout_seconds",
+            "Value": "240"
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "ACM terminates TLS without ACME inbound validation or certificate files on the host. AlbSecondSubnetId is empty only while the Alb condition is false; the AlbInputs rule rejects it otherwise.",
+          "must": [
+            "Keep XFF append mode: Caddyfile.alb takes only the entry the ALB appended.",
+            "Drop invalid header fields.",
+            "Keep PublicSubnetId among the subnets so the single target's zone is enabled.",
+            "Idle timeout must exceed the 180-second dashboard query retry budget."
+          ]
+        },
+        "guard": {
+          "SuppressedRules": [
+            "ELB_LOGGING_ENABLED",
+            "ELB_DELETION_PROTECTION_ENABLED"
+          ]
+        },
+        "cfn-lint": {
+          "config": {
+            "ignore_checks": [
+              "W1030"
+            ]
+          }
+        }
+      }
+    },
+    "TargetGroup": {
+      "Type": "AWS::ElasticLoadBalancingV2::TargetGroup",
+      "Condition": "Alb",
+      "Properties": {
+        "VpcId": {
+          "Ref": "VpcId"
+        },
+        "Protocol": "HTTP",
+        "Port": 8088,
+        "TargetType": "instance",
+        "Targets": [
+          {
+            "Id": {
+              "Ref": "Instance"
+            },
+            "Port": 8088
+          }
+        ],
+        "HealthCheckProtocol": "HTTP",
+        "HealthCheckPath": "/api/health",
+        "Matcher": {
+          "HttpCode": "200"
+        },
+        "HealthCheckIntervalSeconds": 30,
+        "HealthyThresholdCount": 2,
+        "UnhealthyThresholdCount": 3
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "why": "The single host is the only target; plain HTTP stays inside the VPC between the ALB and instance security groups.",
+          "must": [
+            "Target the instance proxy port 8088 served by compose.alb.yml."
+          ]
+        }
+      }
+    },
+    "HttpsListener": {
+      "Type": "AWS::ElasticLoadBalancingV2::Listener",
+      "Condition": "Alb",
+      "Properties": {
+        "LoadBalancerArn": {
+          "Ref": "LoadBalancer"
+        },
+        "Port": 443,
+        "Protocol": "HTTPS",
+        "SslPolicy": "ELBSecurityPolicy-TLS13-1-2-2021-06",
+        "Certificates": [
+          {
+            "CertificateArn": {
+              "Ref": "AlbCertificateArn"
+            }
+          }
+        ],
+        "DefaultActions": [
+          {
+            "Type": "forward",
+            "TargetGroupArn": {
+              "Ref": "TargetGroup"
+            }
+          }
+        ]
+      },
+      "Metadata": {
+        "com.aws.cloudformation.Context": {
+          "must": [
+            "HTTPS only with a TLS 1.2+ policy."
           ]
         }
       }
@@ -680,6 +987,33 @@
         "Ref": "AWS::Region"
       },
       "Description": "Region for the application AWS SDK clients."
+    },
+    "LoadBalancerDnsName": {
+      "Condition": "Alb",
+      "Value": {
+        "Fn::GetAtt": [
+          "LoadBalancer",
+          "DNSName"
+        ]
+      },
+      "Description": "CNAME or alias target for the APP_URL hostname."
+    },
+    "TrustedProxySubnets": {
+      "Condition": "Alb",
+      "Value": {
+        "Fn::Join": [
+          ",",
+          [
+            {
+              "Ref": "PublicSubnetId"
+            },
+            {
+              "Ref": "AlbSecondSubnetId"
+            }
+          ]
+        ]
+      },
+      "Description": "Pass these subnets' IPv4 CIDRs to configure.mjs --trusted-proxy-cidrs."
     }
   }
 }

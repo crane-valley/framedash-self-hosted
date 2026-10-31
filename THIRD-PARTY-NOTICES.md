@@ -50,7 +50,7 @@ The installer downloads these images from their upstream registries. They are no
 inside the Framedash application-image archive. Image identities are pinned below and in Compose;
 upstream licenses and notices apply to those exact distributions independently of the app license.
 
-| Component | Preview image identity | Upstream license location |
+| Component | Image identity | Upstream license location |
 |---|---|---|
 | Caddy | `caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d` | [Caddy license](https://github.com/caddyserver/caddy/blob/master/LICENSE) |
 | PostgreSQL | `postgres@sha256:97ff59a4e30e08d1c11bdcd9455e7832368c0572b576c9092cde2df4ae5552a3` | [PostgreSQL license](https://www.postgresql.org/about/licence/) |

@@ -62,9 +62,23 @@ export function resolveBootstrapNames(env) {
 	return names;
 }
 
+// An operator-owned installation is not metered like a SaaS plan: enterprise keeps the longest
+// retention and no event, member or API caps unless the operator sets a monthly cap.
+export function resolveBootstrapEntitlements(env) {
+	const supplied = env.SELF_HOSTED_MONTHLY_EVENT_LIMIT;
+	if (supplied === undefined || supplied === "")
+		return { planId: "enterprise", monthlyEventLimit: null };
+	const limit = Number(supplied);
+	if (!/^[1-9][0-9]*$/.test(supplied) || limit > 2_147_483_647) {
+		throw new Error("SELF_HOSTED_MONTHLY_EVENT_LIMIT must be a positive integer up to 2147483647");
+	}
+	return { planId: "enterprise", monthlyEventLimit: limit };
+}
+
 export async function bootstrap(env = process.env) {
 	const { ADMIN_EMAIL, ADMIN_PASSWORD, SDK_API_KEY, DATABASE_URL } = env;
 	const names = resolveBootstrapNames(env);
+	const entitlements = resolveBootstrapEntitlements(env);
 	if (env.FRAMEDASH_SELF_HOSTED !== "true") throw new Error("Self-hosted mode is required");
 	const adminEmail = normalizeBootstrapAdminEmail(ADMIN_EMAIL);
 	if (!DATABASE_URL || !ADMIN_EMAIL || !ADMIN_PASSWORD || ADMIN_PASSWORD.length < 16) {
@@ -94,8 +108,8 @@ export async function bootstrap(env = process.env) {
 				VALUES (${adminEmail}, ${names.ADMIN_NAME}, ${passwordHash}, now()) RETURNING id
 			`;
 			const [tenant] = await tx`
-				INSERT INTO tenants (name, slug, plan_id, subscription_status, requires_paid_plan, created_by_user_id)
-				VALUES (${names.WORKSPACE_NAME}, ${names.WORKSPACE_SLUG}, 'team', 'active', false, ${user.id}) RETURNING id
+				INSERT INTO tenants (name, slug, plan_id, monthly_event_limit, subscription_status, requires_paid_plan, created_by_user_id)
+				VALUES (${names.WORKSPACE_NAME}, ${names.WORKSPACE_SLUG}, ${entitlements.planId}::plan_id, ${entitlements.monthlyEventLimit}, 'active', false, ${user.id}) RETURNING id
 			`;
 			await tx`INSERT INTO tenant_members (tenant_id, user_id, role) VALUES (${tenant.id}, ${user.id}, 'billing_admin')`;
 			const [project] =
