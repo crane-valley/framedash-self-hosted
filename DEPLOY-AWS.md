@@ -285,8 +285,8 @@ For the separately published Framedash CLI, select this instance explicitly with
 uses the selected origin. For automation, create a key with the required read/analytics scopes
 on this instance's project API Keys page and supply it using `--api-key-file`; the generated
 SDK ingest key does not grant analytics access. Non-loopback CLI origins require HTTPS.
-`framedash map-capture` honors `FRAMEDASH_BASE_URL` only from the next CLI release; until then pass
-`--base-url`.
+`framedash map-capture` honors `FRAMEDASH_BASE_URL` from CLI 0.2.0, which requires Node.js 22 or
+later; with an older CLI pass `--base-url`.
 
 Optional `configure.mjs` flags `--raw-retention-days` and `--monthly-event-limit` set raw retention
 and a monthly event cap; see [PARITY.md](PARITY.md#entitlements) for details.
@@ -314,8 +314,9 @@ opt-in is not a supported path for this release. Keep the shipped disabled setti
 
 ## HTTPS through an Application Load Balancer
 
-This mode passed a rehearsal on real AWS with an ACM certificate and an internet-facing ALB
-restricted to one CIDR; the `internal` scheme has not been deployed on AWS.
+This mode passed a rehearsal on real AWS, using a v1.0.0 candidate build with an ACM certificate
+and an internet-facing ALB restricted to one CIDR; the `internal` scheme has not been deployed on
+AWS.
 
 Prerequisites are an ACM certificate ARN in the stack Region, a second subnet of the VPC in a
 different Availability Zone (alongside `PublicSubnetId`), the office or VPN CIDR, and a real SMTP

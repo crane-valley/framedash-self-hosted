@@ -1,6 +1,6 @@
 # Hosted and self-hosted parity
 
-This document compares hosted Framedash with self-hosted v1.0.0. Rows reflect code review plus
+This document compares hosted Framedash with self-hosted v1.1.0. Rows reflect code review plus
 the checks in the release notes, not exhaustive testing.
 
 ## Ingestion

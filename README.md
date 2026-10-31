@@ -13,7 +13,8 @@ See [PARITY.md](PARITY.md) for differences from hosted Framedash.
 
 The app origin is configured at runtime through matching `APP_URL`, `AUTH_URL` and
 `NEXT_PUBLIC_APP_URL` values; the installer examples use the tested loopback route. HTTPS on a
-custom domain through the ALB with an ACM certificate passed on real AWS (see
+custom domain through the ALB with an ACM certificate passed on real AWS with a v1.0.0 candidate
+build (see
 [HTTPS through an Application Load Balancer](DEPLOY-AWS.md#https-through-an-application-load-balancer)).
 Caddy's own public-HTTPS mode remains a reference only. Use Node 22, Docker Engine and Docker
 Compose 2.39.4 or newer. This release requires a Linux data filesystem and a single host with enough
@@ -48,14 +49,14 @@ use your installation administrator's approved privileged access. See
 
 Download the installer, image archive, corresponding-source archive and `ASSET_SHA256SUMS.txt`
 from the same reviewed release. After downloading all four files, run the following on a
-workstation and proceed only if they pass. GitHub CLI 2.81 or newer is required, signed in with
+workstation and proceed only if they pass. GitHub CLI 2.83.0 or newer is required, signed in with
 `gh auth login` or a token in `GH_TOKEN`, even though this repository is public. FILE stands for
 each downloaded file; run `verify-asset` for each one. Checksums alone prove integrity only, and
 releases are immutable with GitHub-signed attestations:
 
 ```sh
-gh release verify v1.0.0 --repo crane-valley/framedash-self-hosted
-gh release verify-asset v1.0.0 FILE --repo crane-valley/framedash-self-hosted
+gh release verify v1.1.0 --repo crane-valley/framedash-self-hosted
+gh release verify-asset v1.1.0 FILE --repo crane-valley/framedash-self-hosted
 sha256sum --check ASSET_SHA256SUMS.txt
 ```
 
@@ -124,11 +125,14 @@ node compose.mjs --configfile .env -- -f compose.yml -f compose.preview.yml run 
 ## Validation and limits
 
 The loopback and ALB routes were tested; the included Caddy public-HTTPS configuration is a
-reference only. Local restoration was tested for PostgreSQL, ClickHouse, and Redis only.
+reference only. This release's backup and restore commands passed a local restore into a
+separate empty installation covering PostgreSQL, ClickHouse, Redis and configuration. They have
+not run on real AWS, and S3 objects are not part of them.
 
 Enterprise SSO, sustained load and long-duration operation, AWS disaster recovery, queue replay,
-durable erasure replay, the internal ALB scheme on AWS, and in-place upgrades remain unverified.
-See [OPERATIONS.md](OPERATIONS.md) for the validation details and limitations.
+the internal ALB scheme on AWS, and in-place upgrades remain unverified. Replay of an active
+tombstone with restored keys was verified locally and remains unverified on AWS. See
+[OPERATIONS.md](OPERATIONS.md) for the validation details and limitations.
 
 ## Security reports
 
