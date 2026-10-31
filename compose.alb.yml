@@ -1,0 +1,7 @@
+services:
+  proxy:
+    ports: !override ["8088:8088"]
+    environment:
+      TRUSTED_PROXY_CIDRS: ${TRUSTED_PROXY_CIDRS:?Run configure.mjs with --trusted-proxy-cidrs}
+    volumes:
+      - ./Caddyfile.alb:/etc/caddy/Caddyfile:ro

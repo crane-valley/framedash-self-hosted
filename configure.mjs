@@ -22,6 +22,9 @@ const valueOptions = new Set(
 		"workspace-slug",
 		"project-name",
 		"sdk-api-key-name",
+		"trusted-proxy-cidrs",
+		"monthly-event-limit",
+		"raw-retention-days",
 	].map((name) => `--${name}`),
 );
 const options = new Map();
@@ -59,6 +62,28 @@ if (
 			))
 ) {
 	throw new Error("--domain must be a DNS name");
+}
+const trustedProxyCidrs = options.get("--trusted-proxy-cidrs")?.split(",");
+if (trustedProxyCidrs) {
+	if (test) throw new Error("--trusted-proxy-cidrs requires an HTTPS deployment domain");
+	const octet = "(?:25[0-5]|2[0-4][0-9]|1[0-9]{2}|[1-9]?[0-9])";
+	const cidr = new RegExp(`^(?:${octet}[.]){3}${octet}/(?:[1-9]|[12][0-9]|3[0-2])$`);
+	if (!trustedProxyCidrs.every((value) => cidr.test(value)))
+		throw new Error("--trusted-proxy-cidrs must be comma-separated IPv4 CIDRs with prefixes 1-32");
+}
+const monthlyEventLimit = options.get("--monthly-event-limit");
+if (
+	monthlyEventLimit !== undefined &&
+	(!/^[1-9][0-9]*$/.test(monthlyEventLimit) || Number(monthlyEventLimit) > 2_147_483_647)
+) {
+	throw new Error("--monthly-event-limit must be a positive integer up to 2147483647");
+}
+const rawRetentionDays = options.get("--raw-retention-days");
+if (
+	rawRetentionDays !== undefined &&
+	(!/^[1-9][0-9]{0,3}$/.test(rawRetentionDays) || Number(rawRetentionDays) > 3650)
+) {
+	throw new Error("--raw-retention-days must be a whole number of days from 1 to 3650");
 }
 const here = dirname(fileURLToPath(import.meta.url));
 const dataDirOption = required("data-dir", local ? resolve(here, ".data") : "/srv/framedash/data");
@@ -114,6 +139,9 @@ const settings = {
 	ERASURE_SUPPRESSION_HASH_SECRET: secret("erasure-suppression-hash-secret"),
 	PLAYER_ERASURE_ENCRYPTION_KEY: secret("player-erasure-encryption-key", 32, "base64"),
 };
+if (trustedProxyCidrs) settings.TRUSTED_PROXY_CIDRS = trustedProxyCidrs.join(" ");
+if (monthlyEventLimit) settings.SELF_HOSTED_MONTHLY_EVENT_LIMIT = monthlyEventLimit;
+if (rawRetentionDays) settings.SELF_HOSTED_RAW_RETENTION_DAYS = rawRetentionDays;
 if (local) {
 	settings.SQS_ENDPOINT = "http://localstack:4566";
 	settings.S3_ENDPOINT = "http://localstack:4566";

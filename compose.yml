@@ -30,7 +30,7 @@ x-logging: &logging
   options: { max-size: 10m, max-file: "3" }
 
 x-runtime: &runtime
-  image: framedash-self-hosted-runtime:0.1.0-preview.4
+  image: framedash-self-hosted-runtime:1.0.0
   restart: unless-stopped
   stop_grace_period: 3m
   networks: [ backend ]
@@ -57,7 +57,7 @@ services:
     mem_limit: 256m
 
   web:
-    image: framedash-self-hosted-web:0.1.0-preview.4
+    image: framedash-self-hosted-web:1.0.0
     logging: *logging
     restart: unless-stopped
     environment:
@@ -78,6 +78,7 @@ services:
       SMTP_URL: ${SMTP_URL:?Set SMTP_URL}
       EMAIL_FROM: ${EMAIL_FROM:?Set EMAIL_FROM}
       SELF_HOSTED_PRIVACY_CONTACT: ${SELF_HOSTED_PRIVACY_CONTACT:-}
+      SELF_HOSTED_RAW_RETENTION_DAYS: ${SELF_HOSTED_RAW_RETENTION_DAYS:-}
       PLATFORM_ADMIN_EMAILS: ${ADMIN_EMAIL:?Set ADMIN_EMAIL}
     networks: [ backend ]
     depends_on:
@@ -144,6 +145,7 @@ services:
       WORKSPACE_SLUG: ${WORKSPACE_SLUG:-self-hosted-workspace}
       PROJECT_NAME: ${PROJECT_NAME:-First project}
       SDK_API_KEY_NAME: ${SDK_API_KEY_NAME:-SDK ingest}
+      SELF_HOSTED_MONTHLY_EVENT_LIMIT: ${SELF_HOSTED_MONTHLY_EVENT_LIMIT:-}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -161,7 +163,9 @@ services:
       - ${DATA_DIR}/postgres:/var/lib/postgresql/data
     networks: [ backend ]
     healthcheck:
-      test: [ CMD-SHELL, pg_isready -U framedash -d framedash ]
+      # TCP on purpose: the image's temporary init server answers on the Unix socket, then restarts
+      # and drops a migration that started against it.
+      test: [ CMD-SHELL, pg_isready -h 127.0.0.1 -U framedash -d framedash ]
       interval: 5s
       timeout: 5s
       retries: 20
