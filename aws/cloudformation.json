@@ -16,7 +16,7 @@
       "ref": [
         {
           "at": "README.md",
-          "has": "Setup and limitations",
+          "has": "Install sequence",
           "scope": "local"
         }
       ]
