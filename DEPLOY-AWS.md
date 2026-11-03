@@ -250,7 +250,8 @@ Option notes:
 
 - Root only.
 - `--configfile` must be this release's `.env`.
-- `--compose-file` repeats and takes bare file names.
+- `--compose-file` repeats, takes bare file names, and must include `compose.alb.yml` or
+  `compose.preview.yml`, because the monitor checks the 8088 health port.
 - `--maintenance-minutes` takes the same values as `MaintenanceAlarmMinutes`, default 60, and must
   equal it: the two values drive
   different things (the ALB alarm periods versus the monitor's maintenance allowance and the backup

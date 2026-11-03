@@ -15,6 +15,15 @@ export async function readHostConfig(path) {
 	return config;
 }
 
+// The upgrade and the host monitor check health on 127.0.0.1:8088, which only these overrides
+// publish; plain compose.yml serves the domain on 443 alone.
+export function assertLoopbackHealth(files) {
+	if (!files.some((file) => ["compose.alb.yml", "compose.preview.yml"].includes(file)))
+		throw new Error(
+			"--compose-file needs compose.alb.yml or compose.preview.yml, which publish the 8088 health port",
+		);
+}
+
 // A failed removal must not replace the error that ended the work.
 export async function removeLock(path) {
 	await rm(path, { force: true }).catch((error) => {

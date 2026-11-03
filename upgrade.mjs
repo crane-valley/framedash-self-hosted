@@ -14,7 +14,7 @@ import {
 	readKey,
 	verifyBackup,
 } from "./backup.mjs";
-import { removeLock, withMaintenanceLock } from "./maintenance.mjs";
+import { assertLoopbackHealth, removeLock, withMaintenanceLock } from "./maintenance.mjs";
 
 const run = promisify(execFile);
 const installDirectory = dirname(fileURLToPath(import.meta.url));
@@ -168,6 +168,7 @@ function parseCommand(argv) {
 	// A relative or old path could point Compose at the release being replaced.
 	if (files.some((file) => basename(file) !== file))
 		throw new Error("--compose-file takes a file name from this release");
+	assertLoopbackHealth(files);
 	if (values["skip-backup-check"] !== undefined && values["skip-backup-check"] !== skipBackupValue)
 		throw new Error(`--skip-backup-check needs the value ${skipBackupValue}`);
 	if (!values["skip-backup-check"] && (!values.backup || !values["key-file"]))

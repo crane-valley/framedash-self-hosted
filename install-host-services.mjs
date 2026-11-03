@@ -4,7 +4,7 @@ import { basename, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs, parseEnv, promisify } from "node:util";
 import { readKey } from "./backup.mjs";
-import { readHostConfig, withMaintenanceLock } from "./maintenance.mjs";
+import { assertLoopbackHealth, readHostConfig, withMaintenanceLock } from "./maintenance.mjs";
 
 const run = promisify(execFile);
 const systemdDirectory = "/etc/systemd/system";
@@ -91,6 +91,7 @@ export function hostConfig(values, installDir) {
 	// Relative names follow the release directory across upgrades; an old path would not.
 	if (files.some((file) => basename(file) !== file))
 		throw new Error("--compose-file takes a file name from this release");
+	assertLoopbackHealth(files);
 	const composeArgs = files.flatMap((file) => ["-f", file]);
 	if (resolve(values.configfile) !== resolve(installDir, ".env"))
 		throw new Error("--configfile must be this release's .env");

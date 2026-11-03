@@ -686,6 +686,12 @@ the new release directory, never a path. Pass the same files on every run. The f
 `--current-config` to `.env` in the new directory and refuses if a different `.env` is already
 there: remove it and run again.
 
+The `--compose-file` list must include `compose.alb.yml` or `compose.preview.yml` (refusing with
+`"--compose-file needs compose.alb.yml or compose.preview.yml, which publish the 8088 health port"`),
+because the health wait and host monitor check `http://127.0.0.1:8088` and plain `compose.yml`
+publishes only ports 80 and 443. An installation run with `compose.yml` alone (public HTTPS) cannot
+use `upgrade.mjs` or host services; install 1.2.0 fresh on the production ALB route instead.
+
 `--skip-backup-check accept-unrecoverable-failure` replaces `--backup` and `--key-file`. With it a
 failed migration cannot be recovered. Do not use it for an installation you need to keep.
 
