@@ -76,7 +76,7 @@ are covered only inside that same window. Retain queues and rely on this tested 
 Keep the original configuration and privacy keys when updating. There is no in-place upgrade from
 a 0.1.0-preview release, so install a 1.x release fresh and move data only by your own reviewed
 process. Each later release states in its notes which versions it was tested to upgrade from, and
-any other path is unsupported. 1.2.0 upgrades in place from 1.1.0 only, see [Upgrades](#upgrades).
+any other path is unsupported. 1.2.1 upgrades in place from 1.1.0 or 1.2.0, see [Upgrades](#upgrades).
 A downgrade is never supported, because replacing images does not roll back a migrated schema; back
 up first and test against a restored copy. Check the new release's archive SHA-256 and image IDs.
 
@@ -562,9 +562,9 @@ and [EC2 termination protection](https://docs.aws.amazon.com/AWSEC2/latest/UserG
 
 ## Disk growth
 
-Tested on AWS on final candidate images: raising `DataVolumeSize` from 80 to 100 GiB online under
-1,000 events/s; the change set showed Modify only with no replacement, the stack update took 31 s,
-and there were no client errors and no container restart.
+Tested on AWS on 1.2.0 final candidate images: raising `DataVolumeSize` from 80 to 100 GiB online
+under 1,000 events/s; the change set showed Modify only with no replacement, the stack update took
+31 s, and there were no client errors and no container restart.
 
 Choose sufficient `DataVolumeSize` at creation. Raising that parameter on an existing stack changes
 the EBS block capacity; it does not extend the ext4 filesystem. Shrinking an existing EBS volume is
@@ -644,12 +644,15 @@ them with Compose.
 
 ## Upgrades
 
-This release's `upgrade.mjs` accepts source 1.1.0 only; any other source or a downgrade is refused.
-Run it from the new release directory, as root.
+This release's `upgrade.mjs` accepts source 1.1.0 or 1.2.0; any other source or a downgrade is
+refused. Run it from the new release directory, as root.
 
 It upgrades the installation only, not the stack: a host on a v1.1.0 stack keeps that template's
 auto-stop, public address and lack of alarms. Do not install host services on it, because its
 instance role has no `cloudwatch:PutMetricData` or backup bucket access.
+
+From 1.2.0 the upgrade changes only the installation and the stack needs no change; host services
+are reinstalled by step 12 below.
 
 Before you start, in order:
 
@@ -658,7 +661,12 @@ Before you start, in order:
    run `configure.mjs` there. `upgrade.mjs` copies the current `.env`, verifies the archive
    SHA-256 against `release.json`, needs free space of 4 times the archive size in `DATA_DIR`, and
    loads the images itself.
-2. From the OLD release directory take a backup and verify it. It must be complete (exit 0), taken
+2. If you changed the redis service in the old release's `compose.yml` (for example raised
+   `--maxmemory` and `mem_limit` as in [Redis full](#redis-full)), make the same change in the new
+   release's `compose.yml` before running `upgrade.mjs`, after verifying the installer checksums;
+   `upgrade.mjs` copies only `.env`. Otherwise the new release starts with the shipped 1gb limit and
+   a Redis already above 1 GB refuses writes, so the consumer pauses while health still returns 200.
+3. From the OLD release directory take a backup and verify it. It must be complete (exit 0), taken
    on the source release, belong to this installation, and be under 24 hours old when the upgrade
    checks it. A nightly backup leaves no local copy, so take one here, or download one with
    operator credentials.
@@ -671,7 +679,7 @@ node backup.mjs verify --key-file KEY --backup /srv/framedash/backups/ID
 
 These commands show the ALB route. Loopback installations use `compose.preview.yml` here and below.
 
-3. With `AutoStopHours` above 0, check the auto-stop timer.
+4. With `AutoStopHours` above 0, check the auto-stop timer.
 
 Run from the new release directory:
 
@@ -690,7 +698,7 @@ The `--compose-file` list must include `compose.alb.yml` or `compose.preview.yml
 `"--compose-file needs compose.alb.yml or compose.preview.yml, which publish the 8088 health port"`),
 because the health wait and host monitor check `http://127.0.0.1:8088` and plain `compose.yml`
 publishes only ports 80 and 443. An installation run with `compose.yml` alone (public HTTPS) cannot
-use `upgrade.mjs` or host services; install 1.2.0 fresh on the production ALB route instead.
+use `upgrade.mjs` or host services; install 1.2.1 fresh on the production ALB route instead.
 
 `--skip-backup-check accept-unrecoverable-failure` replaces `--backup` and `--key-file`. With it a
 failed migration cannot be recovered. Do not use it for an installation you need to keep.
@@ -755,10 +763,10 @@ Instance, which the change set rule forbids; see
 
 ## Capacity
 
-Measured on AWS on an m7i.xlarge host with final candidate images, through the ALB on real SQS, one
-API key, 100-event batches, 10 minutes each. All accepted events were inserted, 0 were dropped, peak
-visible queue was 81, drained at once, dead-letter queue stayed at 0, and no alarm fired. Results
-stand for repetitive 100-event batches:
+Measured on AWS on an m7i.xlarge host with 1.2.0 final candidate images, through the ALB on real
+SQS, one API key, 100-event batches, 10 minutes each. All accepted events were inserted, 0 were
+dropped, peak visible queue was 81, drained at once, dead-letter queue stayed at 0, and no alarm
+fired. Results stand for repetitive 100-event batches:
 
 | Rate (events/s) | Duration | Accepted = inserted events | p50 ms | p95 ms | p99 ms |
 | --- | --- | --- | --- | --- | --- |
@@ -768,9 +776,9 @@ stand for repetitive 100-event batches:
 
 - Latency is the HTTP response time of the ingest request through the ALB as seen by the client
   host, excluding queue time.
-- A local run on final candidate images sustained 3,000 events/s for 60 minutes: 10,799,900 accepted
-  and inserted events, 0 restarts, 0 OOM, drained within 1 minute. Latency was not recorded for
-  this run on final candidate images.
+- A local run on 1.2.0 final candidate images sustained 3,000 events/s for 60 minutes: 10,799,900
+  accepted and inserted events, 0 restarts, 0 OOM, drained within 1 minute. Latency was not recorded
+  for this run on 1.2.0 final candidate images.
 - Consumer ceiling: about 24 to 30 messages per second with 72 in flight on m7i.xlarge, so a backlog
   built at 3,000 events/s in 100-event batches does not shrink until load drops.
 - Resource peaks observed on AWS: ClickHouse 42% CPU, 761 MB; consumer 49% CPU, 176 MB; ingest
@@ -809,18 +817,23 @@ stand for repetitive 100-event batches:
   used_memory and maxmemory are in bytes; dbsize is the key count, almost all of it budget claims.
   The monitor's `Healthy` metric also goes to 0 when Redis used_memory reaches 80 percent of
   maxmemory, so `ServiceHealthAlarm` fires before Redis is full (verified against a live container).
-  See [Redis full](#redis-full).
+  On 1.2.0 a full Redis sends batches to the dead-letter queue within minutes; from 1.2.1 they wait
+  in the main queue. See [Redis full](#redis-full).
 - Not measured: EBS performance limits, runs longer than the 15h35m AWS soak, a 72 hour soak, many
   concurrent sources, and dashboard queries during load.
 
 ## Redis full
 
-When Redis reaches its memory limit under `noeviction`, ingest continues returning 202 (its rate
-limiter fails open) and liveness and deep health remain 200, but the consumer fails every budget claim
-with OOM. Batches reach the dead-letter queue within minutes and `DeadLetterAlarm` fires;
-`ServiceHealthAlarm` fires earlier, when Redis used_memory reaches 80 percent of maxmemory. Do not
-delete claims, because the dead-letter queue keeps messages 14 days and a redrive resets their age,
-so deleting a claim can charge usage twice. Recovery frees memory only by raising the limit.
+From 1.2.1, the consumer pauses consumption while the budget store (Redis) rejects
+writes. Ingest continues returning 202 (its rate limiter fails open) and liveness and deep health
+remain 200, so batches accumulate in the main queue, which keeps them up to its 4 day retention.
+The consumer logs `Budget store rejects writes; consumption paused` (warn) when pausing and
+`Budget store accepts writes; consumption resumed` (info) when resuming. `ServiceHealthAlarm` at
+80 percent of maxmemory stays the early warning; queue age rises, so `QueueAgeAlarm` may also fire.
+On 1.2.0, the consumer does not pause and batches reach the dead-letter queue within minutes
+(`DeadLetterAlarm` fires). Do not delete claims, because the dead-letter queue keeps messages
+14 days and a redrive resets their age, so deleting a claim can charge usage twice. Recovery frees
+memory only by raising the limit.
 
 Recovery steps:
 
@@ -836,7 +849,8 @@ Recovery steps:
 
 2. Raise the limit: edit the redis service in `compose.yml` to `--maxmemory 2gb` and
    `mem_limit: 4g`. Keep `mem_limit` at about twice maxmemory, because Redis forks for AOF rewrite;
-   the m7i.xlarge (16 GiB) has room. Then recreate Redis under the maintenance lock:
+   the m7i.xlarge (16 GiB) has room. An upgrade does not carry this edit over; see
+   [Upgrades](#upgrades). Then recreate Redis under the maintenance lock:
 
    ```sh
    node maintenance.mjs run -- node compose.mjs --configfile .env -- -f compose.yml -f compose.preview.yml up -d redis
@@ -850,8 +864,20 @@ Recovery steps:
      exec -T redis sh -c 'REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli info memory | grep -E "^(used_memory|maxmemory):"; REDISCLI_AUTH="$REDIS_PASSWORD" redis-cli dbsize'
    ```
 
-3. Redrive messages from the operator workstation with AWS credentials (the stack outputs give
-   queue URLs, not ARNs):
+3. The consumer resumes on its own (probes run every 15 s; a pause that begins after a batch lasts
+   at least 30 s; a pause found at startup has no minimum and resumes at the next successful probe)
+   and drains the main queue. Check the consumer logs for "Budget store accepts writes; consumption
+   resumed" and watch the main queue drain:
+
+   ```sh
+   node compose.mjs --configfile .env -- -f compose.yml -f compose.preview.yml logs consumer
+   aws sqs get-queue-attributes --queue-url YOUR_QUEUE_URL \
+     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+   ```
+
+4. DLQ redrive from the operator workstation with AWS credentials (the stack outputs give queue URLs,
+   not ARNs), only for messages that dead-lettered on 1.2.0 or for other DLQ causes; skip it when
+   the DLQ is empty:
 
    ```sh
    aws sqs get-queue-attributes --queue-url YOUR_DLQ_URL --attribute-names QueueArn \
@@ -861,31 +887,40 @@ Recovery steps:
    aws sqs start-message-move-task --source-arn DLQ_ARN --destination-arn QUEUE_ARN
    ```
 
-4. Confirm, in this order: the move task is COMPLETED; the DLQ shows 0 for
-   ApproximateNumberOfMessages and ApproximateNumberOfMessagesNotVisible; then the main queue drains
-   to 0 visible and 0 not visible; consumer logs show no new OOM errors; the event count has risen;
-   and after the maintenance lock is released, the host monitor reports `MaintenanceActive` 0 and
-   `Healthy` returns to 1 (`ServiceHealthAlarm` back to OK), because while the lock is held `Healthy`
-   is held at 1:
+5. Confirm completion: the main queue drains to 0 visible and 0 not visible; if a redrive ran, the
+   move task is COMPLETED and the DLQ shows 0 for ApproximateNumberOfMessages and
+   ApproximateNumberOfMessagesNotVisible; consumer logs show no new OOM errors; the event count has
+   risen; and after the maintenance lock is released, the host monitor reports `MaintenanceActive` 0
+   and `Healthy` returns to 1 (`ServiceHealthAlarm` back to OK), because while the lock is held
+   `Healthy` is held at 1:
 
    ```sh
-   aws sqs list-message-move-tasks --source-arn DLQ_ARN
-   aws sqs get-queue-attributes --queue-url YOUR_DLQ_URL \
-     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
    aws sqs get-queue-attributes --queue-url YOUR_QUEUE_URL \
+     --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
+   aws sqs get-queue-attributes --queue-url YOUR_DLQ_URL \
      --attribute-names ApproximateNumberOfMessages ApproximateNumberOfMessagesNotVisible
    ```
 
-5. Only then restart the backup timer:
+   If a redrive ran:
+
+   ```sh
+   aws sqs list-message-move-tasks --source-arn DLQ_ARN
+   ```
+
+6. Only then restart the backup timer:
 
    ```sh
    systemctl start framedash-backup.timer
    ```
 
-Redrive was verified locally on LocalStack only, not on AWS: in a local probe with Redis forced full,
-all 119 batches (11,900 events) reached the dead-letter queue within about 5 minutes (5 receives),
-and after memory was freed an SQS redrive delivered them with events, both daily views, and Redis
-usage matching exactly (11,900 inserted).
+On 1.2.0, redrive was verified locally on LocalStack only, not on AWS: in a local probe with Redis
+forced full, all 119 batches (11,900 events) reached the dead-letter queue within about 5 minutes
+(5 receives), and after memory was freed an SQS redrive delivered them with events, both daily views,
+and Redis usage matching exactly (11,900 inserted). Consumer pause in 1.2.1 was validated locally on
+a test image (Docker and LocalStack, not on AWS): with Redis forced full and 100 events/s for 2
+minutes, all 119 batches stayed available in the main queue for 13 minutes and none reached the
+dead-letter queue, and after maxmemory was restored the consumer resumed about 21 s later and
+inserted all 11,900 events with raw events, both daily views, and Redis usage matching exactly.
 
 Until the dead-letter queue is empty, nightly backups are incomplete; see
 [Nightly backup](#nightly-backup).
@@ -923,7 +958,7 @@ is not a complete air-gapped distribution.
 
 ## Validation details
 
-Repeated on AWS on final candidate images: SMTP delivery through SES with DKIM to an inbox,
+Repeated on AWS on 1.2.0 final candidate images: SMTP delivery through SES with DKIM to an inbox,
 password reset, TLS through ACM and an internal ALB, and host stop and start (about 48 s, data
 identical). From the v1.0.0 candidate, not repeated for this release: sign-in in a real browser and
 HTTP 200 from all 17 dashboard pages (page-by-page browser rendering was not reviewed), persistence
@@ -936,7 +971,7 @@ Caddy configuration is a deployment reference only; the loopback and ALB routes 
 routes. The template's restricted inbound CIDR does not support public HTTP ACME validation
 without a separately reviewed certificate setup.
 
-AWS rehearsal on final candidate images verified stack creation in 5m37s, health, deep and cron
+AWS rehearsal on 1.2.0 final candidate images verified stack creation in 5m37s, health, deep and cron
 endpoints returning 200 from a VPC client host, preflight wrong-AZ rejection, ingest and account
 smokes through the ALB, client IP logging against spoofed headers, S3 map lifecycle operations,
 real password reset, CLI 0.2.0 and MCP 0.1.5 (12 tools, query counting 2,900 events), metrics in
@@ -960,8 +995,9 @@ Redis capacity was revised after the AWS rehearsal: release review identified th
 claims (about 282 bytes per claim, one claim per batch) would fill the previous `192mb` limit in
 about 4 days at 200 events/s. Redis was changed in installer files to `--maxmemory 1gb` and
 `mem_limit 2g` under `noeviction`, and the monitor now reports unhealthy at 80 percent of maxmemory.
-In a local Redis-full probe, ingest continued returning 202 while batches failed to the dead-letter
-queue; after freeing memory, SQS redrive delivered all 11,900 events with exact count matching.
+In a local 1.2.0 Redis-full probe, ingest continued returning 202 while batches failed to the
+dead-letter queue (from 1.2.1 batches wait in the main queue instead; see [Redis full](#redis-full));
+after freeing memory, SQS redrive delivered all 11,900 events with exact count matching.
 The change was validated locally after the AWS rehearsal and was not re-rehearsed on AWS.
 
 Items not verified: enterprise SSO, browser visual check of pages, HostSystemStatusAlarm recover and
