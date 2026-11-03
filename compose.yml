@@ -30,7 +30,7 @@ x-logging: &logging
   options: { max-size: 10m, max-file: "3" }
 
 x-runtime: &runtime
-  image: framedash-self-hosted-runtime:1.1.0
+  image: framedash-self-hosted-runtime:1.2.0
   restart: unless-stopped
   stop_grace_period: 3m
   networks: [ backend ]
@@ -57,7 +57,7 @@ services:
     mem_limit: 256m
 
   web:
-    image: framedash-self-hosted-web:1.1.0
+    image: framedash-self-hosted-web:1.2.0
     logging: *logging
     restart: unless-stopped
     environment:
@@ -72,6 +72,7 @@ services:
       AUTH_TRUST_HOST: "true"
       AUTH_TRUST_PROXY_HEADERS: "true"
       SELF_HOSTED_TELEMETRY_ENABLED: "false"
+      KEEP_ALIVE_TIMEOUT: "125000"
       STORAGE_PROVIDER: s3
       INGEST_PUBLIC_URL: ${APP_URL}/v1/events
       S3_BUCKET_NAME: ${S3_BUCKET_NAME:?Set S3_BUCKET_NAME}
@@ -95,6 +96,10 @@ services:
     environment:
       <<: *common-env
       SELF_HOSTED_TRUSTED_PROXY_IPS: 172.28.31.10
+      # Enterprise limits. A cold key cache otherwise means the free defaults, which a busy source
+      # exceeds, and that rejection comes before the lookup that would restore the plan limit.
+      INGEST_GLOBAL_IP_RATE_LIMIT_PER_MIN: ${INGEST_GLOBAL_IP_RATE_LIMIT_PER_MIN:-2000}
+      INGEST_COLD_PREFIX_RATE_LIMIT_PER_HOUR: ${INGEST_COLD_PREFIX_RATE_LIMIT_PER_HOUR:-4000000}
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -105,18 +110,23 @@ services:
   consumer:
     <<: *runtime
     command: [ node, apps/self-hosted/dist/consumer.js ]
+    environment:
+      <<: *common-env
+      NODE_OPTIONS: --max-old-space-size=1792
     depends_on:
       migrate:
         condition: service_completed_successfully
       redis-http:
         condition: service_started
-    mem_limit: 512m
+    mem_limit: 2g
 
   scheduler:
     <<: *runtime
     command: [ node, infra/self-hosted/scheduler.mjs ]
     depends_on: [ web ]
     mem_limit: 128m
+    # PID 1 without a SIGTERM handler, so the shared 3m only delays host shutdown.
+    stop_grace_period: 15s
 
   migrate:
     <<: *runtime
@@ -172,7 +182,7 @@ services:
     mem_limit: 1g
 
   clickhouse:
-    image: clickhouse/clickhouse-server@sha256:b20a07891b9051db5b97c5d64cd0c7b7f2b50213baedaaac7c526e963447da89
+    image: clickhouse/clickhouse-server@sha256:f5443f9ffa48f0154cdd50cab39fed732201762574a27f04f1f564bbba81832d
     logging: *logging
     restart: unless-stopped
     environment:
@@ -201,12 +211,14 @@ services:
     image: redis@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf
     logging: *logging
     restart: unless-stopped
+    # Each consumer batch keeps a 7 day budget claim of about 280 B, so 1 GB lasts a week at about
+    # 6 messages per second; noeviction fails closed instead of dropping rate limits or claims.
     command:
       [
         sh,
         -c,
-        'exec redis-server --appendonly yes --maxmemory 192mb
-          --maxmemory-policy noeviction --requirepass "$$REDIS_PASSWORD"'
+        'exec redis-server --appendonly yes --maxmemory 1gb --maxmemory-policy
+          noeviction --requirepass "$$REDIS_PASSWORD"'
       ]
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:?Run configure.mjs}
@@ -218,7 +230,7 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
-    mem_limit: 512m
+    mem_limit: 2g
 
   redis-http:
     image: hiett/serverless-redis-http@sha256:65128347949bca511e448fd7238780d624573d74c22b79155a7563db19e9b678
@@ -232,7 +244,18 @@ services:
     depends_on:
       redis:
         condition: service_healthy
-    mem_limit: 128m
+    healthcheck:
+      test:
+        [
+          CMD-SHELL,
+          "wget -q -O /dev/null --header \"Authorization: Bearer $$SRH_TOKEN\"
+            --header \"Content-Type: application/json\" --post-data '[\"PING\"]'
+            http://127.0.0.1:80/"
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    mem_limit: 256m
 
 networks:
   backend:

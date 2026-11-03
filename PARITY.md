@@ -1,6 +1,6 @@
 # Hosted and self-hosted parity
 
-This document compares hosted Framedash with self-hosted v1.1.0. Rows reflect code review plus
+This document compares hosted Framedash with self-hosted v1.2.0. Rows reflect code review plus
 the checks in the release notes, not exhaustive testing.
 
 ## Ingestion
@@ -70,7 +70,10 @@ the checks in the release notes, not exhaustive testing.
 ## Entitlements
 
 - A new installation bootstraps on the Enterprise plan: 365-day raw retention, no event, member,
-  alert-rule or API-call caps. Enterprise ingest rate limits still apply.
+  alert-rule or API-call caps. Enterprise ingest rate limits still apply: 2,000 requests per minute
+  from one source IP and 2,000,000 per hour for one API key. Installations behind one NAT address
+  share the per-IP limit. To lower it, set `INGEST_GLOBAL_IP_RATE_LIMIT_PER_MIN` in `.env`; do not
+  set it above 2000.
 - `configure.mjs --raw-retention-days N` (1-3650) sets `SELF_HOSTED_RAW_RETENTION_DAYS`. It is read
   at runtime. To change it later, edit the configuration file and recreate the web service; a plain
   restart does not re-read the file:
@@ -97,6 +100,7 @@ the checks in the release notes, not exhaustive testing.
   private addresses.
 - Dead-lettered messages keep their budget claims until the month rolls over, unless `--discard-dlq`
   rolls them back (it attempts a rollback for decodable messages). This matters only with a monthly cap.
-- No built-in external monitoring. Monitor `/api/health` and the authenticated `/api/health/cron`
-  (reports only scheduled crons) yourself.
+- External monitoring is off unless the stack sets `AlarmTopicArn` and host services are installed;
+  see the alarm response section of `OPERATIONS.md`. Otherwise monitor `/api/health` and the
+  authenticated `/api/health/cron` (reports only scheduled crons) yourself.
 - S3 object versions are not erased by the application.
