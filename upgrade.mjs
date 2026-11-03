@@ -19,7 +19,7 @@ import { assertLoopbackHealth, removeLock, withMaintenanceLock } from "./mainten
 const run = promisify(execFile);
 const installDirectory = dirname(fileURLToPath(import.meta.url));
 
-export const supportedSources = ["1.1.0"];
+export const supportedSources = ["1.1.0", "1.2.0"];
 const backupMaxAgeHours = 24;
 const healthTimeoutMs = 300_000;
 const healthPollMs = 5_000;
