@@ -54,7 +54,7 @@ upstream licenses and notices apply to those exact distributions independently o
 |---|---|---|
 | Caddy | `caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d` | [Caddy license](https://github.com/caddyserver/caddy/blob/master/LICENSE) |
 | PostgreSQL | `postgres@sha256:97ff59a4e30e08d1c11bdcd9455e7832368c0572b576c9092cde2df4ae5552a3` | [PostgreSQL license](https://www.postgresql.org/about/licence/) |
-| ClickHouse | `clickhouse/clickhouse-server@sha256:b20a07891b9051db5b97c5d64cd0c7b7f2b50213baedaaac7c526e963447da89` | [ClickHouse license](https://github.com/ClickHouse/ClickHouse/blob/master/LICENSE) |
+| ClickHouse | `clickhouse/clickhouse-server@sha256:f5443f9ffa48f0154cdd50cab39fed732201762574a27f04f1f564bbba81832d` | [ClickHouse license](https://github.com/ClickHouse/ClickHouse/blob/master/LICENSE) |
 | Redis | `redis@sha256:02f2cc4882f8bf87c79a220ac958f58c700bdec0dfb9b9ea61b62fb0e8f1bfcf` | [Redis licensing](https://redis.io/legal/licenses/) |
 | Redis REST bridge | `hiett/serverless-redis-http@sha256:65128347949bca511e448fd7238780d624573d74c22b79155a7563db19e9b678` | [Bridge license](https://github.com/hiett/serverless-redis-http/blob/master/LICENSE) |
 | Mailpit | `axllent/mailpit@sha256:81370195cd4a0eab9604d17c2617a7525b0486f9365555253b6c5376c6350f1a` | [Mailpit license](https://github.com/axllent/mailpit/blob/develop/LICENSE) |

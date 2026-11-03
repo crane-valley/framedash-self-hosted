@@ -1,24 +1,21 @@
 <!--
-Problem: Default thread pools and caches are sized for 16+ core production servers, causing 700+
-PIDs, 40% idle CPU, and 1.45 GiB memory usage with only 622 KiB of user data.
-
-Production note: These settings are intentionally aggressive for dev. ClickHouse Cloud does not
-need this file.
+For an always-on host. The dev tuning in infra/clickhouse keeps 2 merge threads and 64 connections,
+which dropped connections with "No thread available" and paused background tasks at 3,000 events
+per second: the consumer alone holds 72 inserts open.
 -->
 <clickhouse>
-    <background_pool_size>2</background_pool_size>
-    <background_schedule_pool_size>2</background_schedule_pool_size>
+    <background_pool_size>4</background_pool_size>
+    <background_schedule_pool_size>16</background_schedule_pool_size>
     <background_buffer_flush_schedule_pool_size>1</background_buffer_flush_schedule_pool_size>
     <background_move_pool_size>1</background_move_pool_size>
     <background_fetches_pool_size>1</background_fetches_pool_size>
-    <background_common_pool_size>1</background_common_pool_size>
+    <background_common_pool_size>2</background_common_pool_size>
     <background_distributed_schedule_pool_size>1</background_distributed_schedule_pool_size>
     <background_message_broker_schedule_pool_size>1</background_message_broker_schedule_pool_size>
-    <background_merges_mutations_concurrency_ratio>1</background_merges_mutations_concurrency_ratio>
 
     <max_thread_pool_size>512</max_thread_pool_size>
     <max_thread_pool_free_size>64</max_thread_pool_free_size>
-    <max_connections>64</max_connections>
+    <max_connections>256</max_connections>
 
     <max_server_memory_usage_to_ram_ratio>0.75</max_server_memory_usage_to_ram_ratio>
     <mark_cache_size>134217728</mark_cache_size>

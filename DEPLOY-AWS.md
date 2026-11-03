@@ -36,9 +36,15 @@ default it keeps replaced and deleted object versions indefinitely. Setting
 this immediately makes older versions eligible for permanent deletion, so back up or inventory any
 versions you need first.
 
-**Validation:** A new AWS host from this template booted, mounted its data volume and recovered
-from a stop and start in the rehearsal; booting with a missing data disk passed static and shell
-tests only.
+**Validation:** In the 1.2.0 rehearsal, the CloudFormation template was tested on AWS in a private
+subnet with an internal ALB and NAT egress. The host booted, mounted its data volume, and recovered
+from a stop and start. Booting with a missing data disk was tested on AWS on an earlier 1.2.0
+candidate: the host stayed accessible over SSM with Docker inactive, and reattaching the volume
+recovered all services in 50 s. A 15h35m soak at 200 events/s passed with zero failures (zero failed
+batches after sender retries and nothing lost; the nightly backup returned 502 for about 3m16s while
+the sender retried) and exact counts, and a final restore drill into a separate second stack reached
+full service 7m17s after the second stack completed (stack creation itself took 5m12s). See
+[Validation details](OPERATIONS.md#validation-details).
 
 The template needs `CAPABILITY_IAM`. Create a parameters file named `stack-params.json`:
 
@@ -95,9 +101,33 @@ The template needs `CAPABILITY_IAM`. Create a parameters file named `stack-param
   {
     "ParameterKey": "AlbSecondSubnetId",
     "ParameterValue": "YOUR_ALB_SECOND_SUBNET_ID"
+  },
+  {
+    "ParameterKey": "InstanceSubnetId",
+    "ParameterValue": "YOUR_PRIVATE_SUBNET_ID"
+  },
+  {
+    "ParameterKey": "AmiImageId",
+    "ParameterValue": "YOUR_FIXED_AMI_ID"
+  },
+  {
+    "ParameterKey": "AlarmTopicArn",
+    "ParameterValue": "YOUR_SNS_TOPIC_ARN"
+  },
+  {
+    "ParameterKey": "MaintenanceAlarmMinutes",
+    "ParameterValue": "YOUR_MAINTENANCE_ALARM_MINUTES"
+  },
+  {
+    "ParameterKey": "BackupRetentionDays",
+    "ParameterValue": "YOUR_BACKUP_RETENTION_DAYS"
   }
 ]
 ```
+
+The parameters `InstanceSubnetId`, `AmiImageId`, `AlarmTopicArn`, `MaintenanceAlarmMinutes` and
+`BackupRetentionDays` are for [Production deployment](#production-deployment); leave a key out to
+take its template default, which keeps today's trial behavior.
 
 Run this command from the extracted installer directory, because the template path is relative.
 It creates the stack only when the signed-in account matches `ExpectedAccountId`:
@@ -112,6 +142,175 @@ aws cloudformation create-stack --region YOUR_AWS_REGION --stack-name YOUR_STACK
 
 For an internet-facing ALB, both subnets must be public subnets; this is an AWS requirement.
 The rehearsal used t3.xlarge.
+
+## Production deployment
+
+### Scope
+
+Production is one always-on host from a new stack created from this release's template only.
+Updating a v1.1.0 stack is unsupported: user data does not rerun, and the SSM latest AMI re-resolves
+on update and can replace the host.
+
+### Prerequisites
+
+- A private subnet for the host (`InstanceSubnetId`) with a default route to a public NAT gateway.
+  The route must exist before stack creation and stay afterwards: Session Manager, the creation
+  signal, dnf, GitHub and Docker Hub need it during creation, and SMTP, Slack and webhooks need
+  egress at runtime. Removing NAT later is unsupported. Proxies and endpoint-only networks are
+  unsupported.
+- `PublicSubnetId` stays the first ALB subnet. The subnet zone of `InstanceSubnetId` must equal
+  `AvailabilityZone`, and that zone must be an ALB zone (preflight checks both).
+- An SNS topic in the stack Region with a confirmed subscriber, and someone who answers alarms.
+  Preflight does not check the topic.
+- The service-linked role for EC2 alarm actions. It may need creating. The principal that creates
+  the stack needs `iam:CreateServiceLinkedRole`, or create it first:
+
+```sh
+aws iam create-service-linked-role --aws-service-name events.amazonaws.com
+```
+
+- The ALB prerequisites of
+  [HTTPS through an Application Load Balancer](#https-through-an-application-load-balancer).
+
+### Production parameter values
+
+| Parameter | Value | Note |
+| --- | --- | --- |
+| AutoStopHours | 0 | no timer; requires AmiImageId. AlarmTopicArn requires AutoStopHours 0. |
+| AmiImageId | fixed x86_64 AMI ID | see the command below; keeps the host from being replaced on update |
+| InstanceSubnetId | the private subnet | requires EnableAlb |
+| EnableAlb | true | |
+| InstanceType | m7i.xlarge | same memory as t3.xlarge |
+| AlarmTopicArn | the SNS topic ARN | adds the alarms; also grants the instance role cloudwatch:PutMetricData in namespace Framedash/SelfHosted. Without it the host monitor cannot report. |
+| MaintenanceAlarmMinutes | 30, 45, 60, 90, 120, 180 or 240 (default 60) | must exceed the nightly backup run time, which stops the proxy |
+| BackupRetentionDays | 7, 14, 30, 60, 90, 180 or 365 (default 0, off) | creates the write-only backup bucket; follow your privacy policy, because erased data stays in a backup until it goes |
+| DataVolumeSize | 30 through 2000 GiB (default 80) | a backup needs free space of 1.2 times the used data, so keep the disk at least 2.2 times the expected used size |
+
+Resolve the AMI once and record the ID:
+
+```sh
+aws ssm get-parameters --region YOUR_AWS_REGION \
+  --names /aws/service/ami-amazon-linux-latest/al2023-ami-kernel-default-x86_64 \
+  --query 'Parameters[0].Value' --output text
+```
+
+### Preflight
+
+Before create-stack, from the extracted installer directory, on the workstation (Node 22 and
+AWS CLI with read access to sts, ec2 and acm):
+
+```sh
+node aws/preflight.mjs --parameters stack-params.json --region YOUR_AWS_REGION
+```
+
+It prints JSON with `success` and `failures` and exits 1 on any failure. Preflight checks the
+signed-in account, subnets in `VpcId`, zone matches, ALB zones differ and include the host zone,
+certificate `ISSUED`, internet gateway routes for an internet-facing ALB, active default route from
+the host subnet to an available public NAT gateway whose own subnet routes to an internet gateway,
+AMI available and x86_64, `AutoStopHours` 0 has `AmiImageId`, and instance type offered in the zone.
+It does not check the SNS topic or the service-linked role. Proceed only on success. Then create the
+stack as above and continue with
+[Initial data-volume preparation](#initial-data-volume-preparation) and the ALB install.
+
+### Host services
+
+After the application is installed and the stack outputs are recorded, generate the backup key as
+root in the privileged installer shell. It goes on the root disk, not under `DATA_DIR` and not next
+to backups: the nightly service needs it unattended. Mode 0400, owner root. Keep a copy in Secrets
+Manager or equivalent, because the root disk does not survive host loss:
+
+```sh
+install -d -m 700 /etc/framedash
+node backup.mjs keygen --output /etc/framedash/backup.key
+chmod 0400 /etc/framedash/backup.key
+chown root:root /etc/framedash/backup.key
+```
+
+The instance role has no Secrets Manager access. Using short-lived operator credentials exported
+only in that shell and unset afterwards, as in [Off-host storage](OPERATIONS.md#off-host-storage):
+
+```sh
+aws secretsmanager create-secret --region YOUR_AWS_REGION --name YOUR_SECRET_NAME \
+  --secret-string file:///etc/framedash/backup.key
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+```
+
+Then, as root from the installer directory, with `BackupBucketName` from the stack outputs:
+
+```sh
+node install-host-services.mjs --configfile .env \
+  --compose-file compose.yml --compose-file compose.alb.yml \
+  --stack-name YOUR_STACK_NAME --region YOUR_AWS_REGION \
+  --maintenance-minutes YOUR_MAINTENANCE_ALARM_MINUTES \
+  --backup-bucket YOUR_BACKUP_BUCKET_NAME --backup-time 18:05 \
+  --key-file /etc/framedash/backup.key --output-dir /srv/framedash/backups
+```
+
+Option notes:
+
+- Root only.
+- `--configfile` must be this release's `.env`.
+- `--compose-file` repeats, takes bare file names, and must include `compose.alb.yml` or
+  `compose.preview.yml`, because the monitor checks the 8088 health port.
+- `--maintenance-minutes` takes the same values as `MaintenanceAlarmMinutes`, default 60, and must
+  equal it: the two values drive
+  different things (the ALB alarm periods versus the monitor's maintenance allowance and the backup
+  service timeout).
+- `--key-file` must be absolute.
+- Key and `--output-dir` stay outside the release directory.
+- Without `--backup-bucket` only the monitor is installed and no backup runs.
+- `--backup-time` is HH:MM in UTC and required with `--backup-bucket`.
+- `--reuse-existing` rereads `/etc/framedash/host.json` and is what `upgrade.mjs` runs.
+- `--uninstall` removes the units and `host.json`.
+
+`--backup-time` must start from 05:00 through 22:59 UTC. The tool refuses other times. Why: a backup
+stops the scheduler, the daily cleanup crons run at their exact minute from 03:00 to 04:45 UTC, and
+a cron whose minute passes while the scheduler is stopped is skipped for that day with no catch-up.
+Example: 18:05 UTC. The tool takes a start 5 to 15 minutes past the hour. Keep the run under about
+45 minutes, because hourly crons fire at minute 0: a run covering minute 0 skips them, hourly crons go stale 90
+minutes after their last success, and `ServiceHealthAlarm` then fires until the next hour's run
+succeeds (up to about 30 minutes). See [Alarm response](OPERATIONS.md#alarm-response) in
+OPERATIONS.md.
+
+It installs `framedash-monitor.timer` (every minute) and `framedash-backup.timer`. Check:
+
+```sh
+systemctl list-timers 'framedash-*'
+journalctl -u framedash-monitor.service --since '10 minutes ago'
+```
+
+### Expected alarm state
+
+Alarms that treat missing data as breaching are in ALARM from creation until data arrives, and the
+SNS topic receives those notifications: `ServiceHealthAlarm`, `BackupHeadroomAlarm` and
+`RootDiskAlarm` until the monitor reports; `AlbHealthyHostAlarm` until the target is healthy;
+`BackupAgeAlarm` until the first good nightly backup. `HostSystemStatusAlarm` and
+`HostInstanceStatusAlarm` treat missing data as missing. To avoid waiting for the timer, run the
+first backup now; it takes the application offline:
+
+```sh
+systemctl start framedash-backup.service
+```
+
+### Stack updates
+
+Every later update goes through a change set that shows no `Instance` or `DataVolume` replacement.
+Stop on `Replacement` `True` or `Conditional` for either. Commands:
+
+```sh
+aws cloudformation create-change-set --region YOUR_AWS_REGION --stack-name YOUR_STACK_NAME \
+  --change-set-name YOUR_CHANGE_SET_NAME --template-body file://aws/cloudformation.json \
+  --parameters file://stack-params.json --capabilities CAPABILITY_IAM
+aws cloudformation wait change-set-create-complete --region YOUR_AWS_REGION \
+  --stack-name YOUR_STACK_NAME --change-set-name YOUR_CHANGE_SET_NAME
+aws cloudformation describe-change-set --region YOUR_AWS_REGION --stack-name YOUR_STACK_NAME \
+  --change-set-name YOUR_CHANGE_SET_NAME \
+  --query 'Changes[].ResourceChange.{Id:LogicalResourceId,Action:Action,Replacement:Replacement}'
+```
+
+Execute only after review, with `aws cloudformation execute-change-set --region YOUR_AWS_REGION
+--stack-name YOUR_STACK_NAME --change-set-name YOUR_CHANGE_SET_NAME`. Keep `AutoStopHours`,
+`AmiImageId` and `InstanceSubnetId` unchanged.
 
 ## Initial data-volume preparation
 
@@ -214,8 +413,9 @@ and queues are retained [as described there](OPERATIONS.md#aws-replacement-and-d
 
 ## Runtime configuration
 
-The host auto-stops eight hours after each boot by default. This is a runtime bound rather than
-a spending limit. `AutoStopHours` configures the timer only during initial host bootstrap.
+With `AutoStopHours` above 0 the host auto-stops that many hours after each boot; the default is
+eight. This is a runtime bound rather than a spending limit. `AutoStopHours` 0 installs no timer.
+`AutoStopHours` configures the timer only during initial host bootstrap.
 Changing it on an existing stack does not update the installed timer: EC2 user data is not
 automatically rerun after an update or stop/start. Keep its original value during stack updates.
 Changing an existing host's runtime limit requires separately reviewed privileged timer maintenance;
@@ -231,6 +431,8 @@ The default consumer polls only the main queue. Messages that exhaust its config
 remain in the DLQ for operator diagnosis, subject to the template's 14-day SQS retention expiry.
 Monitor that queue and arrange any required preservation before expiry. Budget claims may remain
 held for failed messages. This release does not provide or validate an automatic replay workflow.
+A manual redrive to the main queue is described in [OPERATIONS.md](OPERATIONS.md#redis-full) and
+was verified locally only.
 
 After diagnosing failures and reviewing the exact DLQ configured in `.env`, an authorized operator
 can explicitly discard its visible messages from the privileged installer shell. ALB installations
@@ -314,17 +516,18 @@ opt-in is not a supported path for this release. Keep the shipped disabled setti
 
 ## HTTPS through an Application Load Balancer
 
-This mode passed a rehearsal on real AWS, using a v1.0.0 candidate build with an ACM certificate
-and an internet-facing ALB restricted to one CIDR; the `internal` scheme has not been deployed on
-AWS.
+This mode passed rehearsals on real AWS: the `internal` scheme was deployed in the 1.2.0 rehearsal
+with an ACM certificate in a private subnet, while the `internet-facing` scheme was verified in an
+earlier v1.0.0 candidate rehearsal restricted to one CIDR.
 
 Prerequisites are an ACM certificate ARN in the stack Region, a second subnet of the VPC in a
 different Availability Zone (alongside `PublicSubnetId`), the office or VPN CIDR, and a real SMTP
 service (Mailpit is omitted; the first administrator password change uses the email reset flow).
 With Amazon SES, verify a domain identity with DKIM for the sender domain and send from that domain.
 A single-address identity is not enough if the domain publishes DMARC p=reject: receivers such as
-Google reject the mail and only a bounce comes back. A subdomain identity works. The SES sandbox
-only delivers to verified recipients.
+Google reject the mail and only a bounce comes back. A subdomain identity works. A new SES account
+starts in the sandbox, which delivers only to verified recipients until production access is
+granted, so the first password reset needs production access or a verified recipient.
 
 Set `EnableAlb=true`, `AlbScheme` (`internal` or `internet-facing`, defaulting to `internal`),
 `AlbCertificateArn`, `AlbSecondSubnetId`, and `AllowedClientCidr`. Rule `AlbInputs` asserts that
@@ -383,5 +586,6 @@ subnet record the ALB node address instead of the client; never add client range
 
 An ACM-issued, DNS-validated certificate renews automatically; imported certificates do not.
 
-ALB hourly charges continue while the EC2 host is auto-stopped. The host auto-stops after
-`AutoStopHours` (default 8, up to 24); someone must start it each working day.
+With `AutoStopHours` above 0, ALB charges continue while the host is stopped, it auto-stops after
+`AutoStopHours` (default 8, up to 24) and someone must start it each working day. With
+`AutoStopHours` 0 the host keeps running.

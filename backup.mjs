@@ -25,6 +25,7 @@ import { pipeline } from "node:stream/promises";
 import { fileURLToPath } from "node:url";
 import { parseArgs, parseEnv } from "node:util";
 import { composeInvocation, redactionValues, stderrRedactor } from "./compose.mjs";
+import { withMaintenanceLock } from "./maintenance.mjs";
 
 const formatVersion = 1;
 const magic = Buffer.from("FDBKUP01");
@@ -33,7 +34,8 @@ const chunkBytes = 1024 * 1024;
 const frameHeaderBytes = 5;
 const tagBytes = 16;
 const components = ["config", "postgres", "clickhouse", "redis"];
-const stopSeconds = { clickhouse: 120, redis: 60 };
+// The scheduler runs as PID 1 with no SIGTERM handler, so any longer grace is only added downtime.
+const stopSeconds = { clickhouse: 120, redis: 60, scheduler: 15 };
 const dataPaths = {
 	postgres: "/var/lib/postgresql/data",
 	clickhouse: "/var/lib/clickhouse",
@@ -249,6 +251,10 @@ function backupIdOf(directory) {
 	if (!/^framedash-backup-\d{8}T\d{6}Z-[0-9a-f]{8}$/.test(id))
 		throw new Error("Backup path must be an unmodified backup directory");
 	return id;
+}
+
+export function readBackupConfig(directory, key) {
+	return readSealed(directory, key, backupIdOf(directory), "config");
 }
 
 export async function verifyBackup(directory, key) {
@@ -941,24 +947,13 @@ export function parseKey(text) {
 	return Buffer.from(text.trim(), "hex");
 }
 
-async function readKey(path) {
+export async function readKey(path) {
 	const info = await stat(path);
 	if (process.platform !== "win32" && info.isFile() && info.mode & 0o077)
 		throw new Error("Backup key file must not be readable by group or others");
+	if (process.getuid?.() === 0 && info.isFile() && info.uid !== 0)
+		throw new Error("Backup key file must be owned by root");
 	return parseKey(await readFile(path, "utf8"));
-}
-
-export async function withLock(configfile, work) {
-	const lock = `${configfile}.backup-lock`;
-	await writeFile(lock, String(process.pid), { flag: "wx", mode: 0o600 }).catch((error) => {
-		if (error.code !== "EEXIST") throw error;
-		throw new Error(`${lock} exists; remove it only after confirming no backup or restore runs`);
-	});
-	try {
-		return await work();
-	} finally {
-		await rm(lock, { force: true });
-	}
 }
 
 async function readRelease(configfile) {
@@ -1022,8 +1017,10 @@ async function main() {
 		const abort = () => compose.abort();
 		process.once("SIGINT", abort);
 		process.once("SIGTERM", abort);
-		const { path, manifest, restarted } = await withLock(configfile, () =>
-			createBackup({ compose, configBytes, key, outputDir, release, log }),
+		const { path, manifest, restarted } = await withMaintenanceLock(
+			settings.DATA_DIR,
+			"backup",
+			() => createBackup({ compose, configBytes, key, outputDir, release, log }),
 		);
 		if (!manifest.complete) {
 			log("INCOMPLETE: queued events exist that this backup can never contain; see OPERATIONS.md");
@@ -1045,7 +1042,7 @@ async function main() {
 		return;
 	}
 	const targetRelease = await readRelease(configfile);
-	const manifest = await withLock(configfile, () =>
+	const manifest = await withMaintenanceLock(settings.DATA_DIR, "restore", () =>
 		restoreBackup({
 			backupDir: resolve(values.backup),
 			key,
