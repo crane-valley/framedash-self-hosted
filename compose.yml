@@ -1,6 +1,6 @@
 name: framedash-self-hosted
 
-x-common-env: &common-env
+x-database-env: &database-env
   NODE_ENV: production
   ENVIRONMENT: production
   DEPLOYMENT_ENV: production
@@ -10,6 +10,10 @@ x-common-env: &common-env
   CLICKHOUSE_URL: http://clickhouse:8123?user=default&password=${CLICKHOUSE_PASSWORD:?Run
     configure.mjs}
   CLICKHOUSE_DATABASE: framedash
+
+# Ingest and the consumer share apps/self-hosted/src/env.ts, which requires all of these secrets for both.
+x-pipeline-env: &pipeline-env
+  <<: *database-env
   UPSTASH_REDIS_REST_URL: http://redis-http:80
   UPSTASH_REDIS_REST_TOKEN: ${REDIS_REST_TOKEN:?Run configure.mjs}
   AWS_REGION: ${AWS_REGION:?Set AWS_REGION}
@@ -19,8 +23,6 @@ x-common-env: &common-env
   SQS_QUEUE_URL: ${SQS_QUEUE_URL:?Set SQS_QUEUE_URL}
   SQS_DLQ_URL: ${SQS_DLQ_URL:?Set SQS_DLQ_URL}
   SQS_ENDPOINT: ${SQS_ENDPOINT:-}
-  AUTH_SECRET: ${AUTH_SECRET:?Run configure.mjs}
-  CRON_SECRET: ${CRON_SECRET:?Run configure.mjs}
   AUDIT_LOG_HASH_SECRET: ${AUDIT_LOG_HASH_SECRET:?Run configure.mjs}
   ERASURE_SUPPRESSION_HASH_SECRET: ${ERASURE_SUPPRESSION_HASH_SECRET:?Run configure.mjs}
   PLAYER_ERASURE_ENCRYPTION_KEY: ${PLAYER_ERASURE_ENCRYPTION_KEY:?Run configure.mjs}
@@ -30,13 +32,18 @@ x-logging: &logging
   options: { max-size: 10m, max-file: "3" }
 
 x-runtime: &runtime
-  image: framedash-self-hosted-runtime:1.2.1
+  image: framedash-self-hosted-runtime:1.2.2
   restart: unless-stopped
   stop_grace_period: 3m
   networks: [ backend ]
   logging: *logging
-  environment: *common-env
   pull_policy: never
+
+x-node-health: &node-health
+  interval: 10s
+  timeout: 5s
+  retries: 6
+  start_period: 60s
 
 services:
   proxy:
@@ -57,11 +64,13 @@ services:
     mem_limit: 256m
 
   web:
-    image: framedash-self-hosted-web:1.2.1
+    image: framedash-self-hosted-web:1.2.2
     logging: *logging
     restart: unless-stopped
     environment:
-      <<: *common-env
+      <<: *pipeline-env
+      AUTH_SECRET: ${AUTH_SECRET:?Run configure.mjs}
+      CRON_SECRET: ${CRON_SECRET:?Run configure.mjs}
       FRAMEDASH_SELF_HOSTED: "true"
       S3_ENDPOINT:
       S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE:-false}
@@ -82,6 +91,16 @@ services:
       SELF_HOSTED_RAW_RETENTION_DAYS: ${SELF_HOSTED_RAW_RETENTION_DAYS:-}
       PLATFORM_ADMIN_EMAILS: ${ADMIN_EMAIL:?Set ADMIN_EMAIL}
     networks: [ backend ]
+    healthcheck:
+      <<: *node-health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:3000/api/health').then((r) =>
+            process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+        ]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -94,12 +113,23 @@ services:
     <<: *runtime
     command: [ node, apps/self-hosted/dist/ingest.js ]
     environment:
-      <<: *common-env
+      <<: *pipeline-env
       SELF_HOSTED_TRUSTED_PROXY_IPS: 172.28.31.10
       # Enterprise limits. A cold key cache otherwise means the free defaults, which a busy source
       # exceeds, and that rejection comes before the lookup that would restore the plan limit.
       INGEST_GLOBAL_IP_RATE_LIMIT_PER_MIN: ${INGEST_GLOBAL_IP_RATE_LIMIT_PER_MIN:-2000}
       INGEST_COLD_PREFIX_RATE_LIMIT_PER_HOUR: ${INGEST_COLD_PREFIX_RATE_LIMIT_PER_HOUR:-4000000}
+      INGEST_MAINTENANCE_MODE: ${INGEST_MAINTENANCE_MODE:-}
+    healthcheck:
+      <<: *node-health
+      test:
+        [
+          CMD,
+          node,
+          -e,
+          "fetch('http://127.0.0.1:8080/healthz').then((r) =>
+            process.exit(r.ok ? 0 : 1), () => process.exit(1))"
+        ]
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -111,7 +141,7 @@ services:
     <<: *runtime
     command: [ node, apps/self-hosted/dist/consumer.js ]
     environment:
-      <<: *common-env
+      <<: *pipeline-env
       NODE_OPTIONS: --max-old-space-size=1792
     depends_on:
       migrate:
@@ -123,6 +153,9 @@ services:
   scheduler:
     <<: *runtime
     command: [ node, infra/self-hosted/scheduler.mjs ]
+    environment:
+      NODE_ENV: production
+      CRON_SECRET: ${CRON_SECRET:?Run configure.mjs}
     depends_on: [ web ]
     mem_limit: 128m
     # PID 1 without a SIGTERM handler, so the shared 3m only delays host shutdown.
@@ -132,6 +165,7 @@ services:
     <<: *runtime
     restart: "no"
     command: [ pnpm, migrate:all ]
+    environment: *database-env
     depends_on:
       postgres:
         condition: service_healthy
@@ -145,7 +179,9 @@ services:
     profiles: [ bootstrap ]
     command: [ node, infra/self-hosted/bootstrap.mjs ]
     environment:
-      <<: *common-env
+      NODE_ENV: production
+      DATABASE_URL: postgres://framedash:${POSTGRES_PASSWORD:?Run
+        configure.mjs}@postgres:5432/framedash
       FRAMEDASH_SELF_HOSTED: "true"
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Run configure.mjs}

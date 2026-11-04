@@ -76,9 +76,10 @@ are covered only inside that same window. Retain queues and rely on this tested 
 Keep the original configuration and privacy keys when updating. There is no in-place upgrade from
 a 0.1.0-preview release, so install a 1.x release fresh and move data only by your own reviewed
 process. Each later release states in its notes which versions it was tested to upgrade from, and
-any other path is unsupported. 1.2.1 upgrades in place from 1.1.0 or 1.2.0, see [Upgrades](#upgrades).
-A downgrade is never supported, because replacing images does not roll back a migrated schema; back
-up first and test against a restored copy. Check the new release's archive SHA-256 and image IDs.
+any other path is unsupported. 1.2.2 upgrades in place from 1.1.0, 1.2.0 or 1.2.1, see
+[Upgrades](#upgrades). A downgrade is never supported, because replacing images does not roll back a
+migrated schema; back up first and test against a restored copy. Check the new release's archive
+SHA-256 and image IDs.
 
 Before replacing a host or image version, run a backup, record the release and the backup's output
 JSON, and test a restore; see [Backup and restore](#backup-and-restore).
@@ -644,15 +645,15 @@ them with Compose.
 
 ## Upgrades
 
-This release's `upgrade.mjs` accepts source 1.1.0 or 1.2.0; any other source or a downgrade is
-refused. Run it from the new release directory, as root.
+This release's `upgrade.mjs` accepts source 1.1.0, 1.2.0 or 1.2.1; any other source or a downgrade
+is refused. Run it from the new release directory, as root.
 
 It upgrades the installation only, not the stack: a host on a v1.1.0 stack keeps that template's
 auto-stop, public address and lack of alarms. Do not install host services on it, because its
 instance role has no `cloudwatch:PutMetricData` or backup bucket access.
 
-From 1.2.0 the upgrade changes only the installation and the stack needs no change; host services
-are reinstalled by step 12 below.
+From 1.2.0 or 1.2.1 the upgrade changes only the installation and the stack needs no change; host
+services are reinstalled by step 12 below.
 
 Before you start, in order:
 
@@ -698,7 +699,7 @@ The `--compose-file` list must include `compose.alb.yml` or `compose.preview.yml
 `"--compose-file needs compose.alb.yml or compose.preview.yml, which publish the 8088 health port"`),
 because the health wait and host monitor check `http://127.0.0.1:8088` and plain `compose.yml`
 publishes only ports 80 and 443. An installation run with `compose.yml` alone (public HTTPS) cannot
-use `upgrade.mjs` or host services; install 1.2.1 fresh on the production ALB route instead.
+use `upgrade.mjs` or host services; install 1.2.2 fresh on the production ALB route instead.
 
 `--skip-backup-check accept-unrecoverable-failure` replaces `--backup` and `--key-file`. With it a
 failed migration cannot be recovered. Do not use it for an installation you need to keep.
@@ -833,7 +834,9 @@ The consumer logs `Budget store rejects writes; consumption paused` (warn) when 
 On 1.2.0, the consumer does not pause and batches reach the dead-letter queue within minutes
 (`DeadLetterAlarm` fires). Do not delete claims, because the dead-letter queue keeps messages
 14 days and a redrive resets their age, so deleting a claim can charge usage twice. Recovery frees
-memory only by raising the limit.
+memory only by raising the limit. Deep health does not check Redis and the host monitor is the Redis
+signal, because the ALB target group uses unauthenticated liveness and the host monitor reads Redis
+memory directly, reporting unhealthy at 80 percent earlier than an out-of-memory check would.
 
 Recovery steps:
 
@@ -924,6 +927,35 @@ inserted all 11,900 events with raw events, both daily views, and Redis usage ma
 
 Until the dead-letter queue is empty, nightly backups are incomplete; see
 [Nightly backup](#nightly-backup).
+
+### Stopping ingest while Redis is full
+
+By default ingest keeps accepting events and the main queue holds each batch for 4 days from when
+it was sent. The switch below stops new intake only: batches already in the queue still expire 4
+days after they were sent, so recover and drain the queue before the oldest one does. If recovery
+may take long, or you prefer senders to keep new events, set `INGEST_MAINTENANCE_MODE=true` in
+`.env` and recreate ingest under the maintenance lock:
+
+```sh
+node maintenance.mjs run -- node compose.mjs --configfile .env -- -f compose.yml -f compose.preview.yml up -d ingest
+```
+
+Confirm the switch on the host with the test POST, which needs no API key:
+
+```sh
+curl -sS -i -X POST --data '' http://localhost:8088/v1/events
+```
+
+When active, it returns 503 with `Retry-After: 60` before validation, authentication, body reads,
+or queue writes. All three SDKs (UE5, Unity, Godot) retry 5xx and 429 and keep events locally
+within their offline limits, so a long stop can still lose events on devices. The ALB 5XX alarm
+(`HTTPCode_Target_5XX_Count`) may fire under sustained traffic while the switch is on; with low
+traffic it may not. Confirm the switch with the POST, not the alarm.
+
+To resume: delete the line from `.env` (a shell export does not keep it on, as `compose.mjs`
+ignores values in the shell), recreate ingest with the same command, and confirm the POST returns
+401 instead of 503. The setting carries over an upgrade because `upgrade.mjs` copies `.env`; turn
+it off before upgrading unless intended.
 
 ## Using the CLI and MCP with this host
 

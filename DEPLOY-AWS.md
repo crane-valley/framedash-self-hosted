@@ -147,8 +147,8 @@ The rehearsal used t3.xlarge.
 
 ### Scope
 
-Production is one always-on host on a stack created from the 1.2.0 or 1.2.1 template (the two are
-identical).
+Production is one always-on host on a stack created from the 1.2.0, 1.2.1 or 1.2.2 template (all
+three are identical).
 Updating a v1.1.0 stack is unsupported: user data does not rerun, and the SSM latest AMI re-resolves
 on update and can replace the host.
 
