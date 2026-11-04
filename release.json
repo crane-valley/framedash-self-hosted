@@ -1,26 +1,26 @@
 {
-  "version": "1.2.1",
+  "version": "1.2.2",
   "platform": "linux/amd64",
   "testedAppUrl": "http://localhost:8088",
   "appUrlConfiguredAtRuntime": true,
   "images": {
     "runtime": {
-      "tag": "framedash-self-hosted-runtime:1.2.1",
-      "id": "sha256:73895cdc55d014455794674bb5d6ef1954f24c5e1c12f7198dad5224fdd15a96",
-      "configId": "sha256:4e2c9e837b00175f929e924288995117ab679e6777dd188304e9ee221bf39599"
+      "tag": "framedash-self-hosted-runtime:1.2.2",
+      "id": "sha256:8df4bc04b9c554d1479b302210f376e5d1b411660ef2d2b8d76ddd9d2076e72c",
+      "configId": "sha256:0009c860f5e343af715c3618f18682ade1059c0d808184bb668c154698726c4d"
     },
     "web": {
-      "tag": "framedash-self-hosted-web:1.2.1",
-      "id": "sha256:dc8d8e48b939c16ab2fd85474c03146c8ba8a1fcb838dc581d3cd89a234c367b",
-      "configId": "sha256:6f10106abd3e23a0684d088506f3f96202531125c888516cecdc27b3ea239fbd"
+      "tag": "framedash-self-hosted-web:1.2.2",
+      "id": "sha256:89ef23be394f7a88e36b34848b5ca05a3b9799ece4e9744fddfb936e3b638110",
+      "configId": "sha256:92d8f12512470ae609fcfe8337511e974973466c53ce00d20b44c04b800cbdd8"
     }
   },
   "archive": {
-    "filename": "framedash-images-1.2.1.tar.gz",
-    "sha256": "bef0b99197ed8c2bec3bca513ac1ae244d4fae0ded823c8816af392198d07a7c"
+    "filename": "framedash-images-1.2.2.tar.gz",
+    "sha256": "7cae3c8832a8f88126844e032a21968576f37e20e863b93fd27bef71f6415be7"
   },
   "baseSources": {
-    "filename": "framedash-base-sources-1.2.1.tar.gz",
-    "sha256": "59f042472df7df971cce2fa59cf8dddfd6468e06ad82674d609290ab91476409"
+    "filename": "framedash-base-sources-1.2.2.tar.gz",
+    "sha256": "3974eb5783ff6d2a90baa611cb949a14abf8132aa4a43c2705833616a3dcfff1"
   }
 }

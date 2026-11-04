@@ -143,6 +143,8 @@ export function composeInvocation(configfile, forwarded, shellEnvironment, setti
 		"S3_FORCE_PATH_STYLE",
 		"SQS_ENDPOINT",
 		"SELF_HOSTED_PRIVACY_CONTACT",
+		// Deleting the line from the file must reopen ingest, even if a shell still exports it.
+		"INGEST_MAINTENANCE_MODE",
 	]);
 	for (const key of Object.keys(environment)) {
 		if (fileOwnedOptionals.has(key.toUpperCase())) delete environment[key];

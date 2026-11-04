@@ -17,10 +17,11 @@ public-HTTPS mode remains a reference only. Use Node 22, Docker Engine and Docke
 newer. This release requires a Linux data filesystem and a single host; no supported ARM or
 multi-host deployment is provided.
 
-Release 1.2.1 is a patch release of 1.2.0 that adds the consumer pause on a full Redis (budget
-store). It provides an always-on production deployment with alarms, nightly backup and upgrades
-from 1.1.0 or 1.2.0, on one host with no high availability. Production uses m7i.xlarge with 16 GiB
-memory.
+Release 1.2.2 is a patch release of 1.2.1 with rebuilt images (Next.js security fix, Y-up heatmap
+fix) plus installer changes (ingest maintenance switch, scoped secrets for internal containers,
+and healthchecks on web and ingest). It provides an always-on production deployment with alarms,
+nightly backup and upgrades from 1.1.0, 1.2.0 or 1.2.1, on one host with no high availability.
+Production uses m7i.xlarge with 16 GiB memory.
 
 The 1.2.0 production stack was rehearsed on AWS on an m7i.xlarge host with an internal ALB and
 alarms: every accepted event was inserted at up to 3,000 events/s over 10 minutes. See
@@ -62,8 +63,8 @@ each downloaded file; run `verify-asset` for each one. Checksums alone prove int
 releases are immutable with GitHub-signed attestations:
 
 ```sh
-gh release verify v1.2.1 --repo crane-valley/framedash-self-hosted
-gh release verify-asset v1.2.1 FILE --repo crane-valley/framedash-self-hosted
+gh release verify v1.2.2 --repo crane-valley/framedash-self-hosted
+gh release verify-asset v1.2.2 FILE --repo crane-valley/framedash-self-hosted
 sha256sum --check ASSET_SHA256SUMS.txt
 ```
 
@@ -141,13 +142,18 @@ preserved, but has not been rehearsed on AWS. Enterprise SSO, browser visual che
 DLQ redrive on AWS (verified locally only), and replay into a restored installation remain
 unverified.
 
-Release 1.2.1 was validated locally only (not rehearsed on AWS).
+Release 1.2.2 was validated locally only (not rehearsed on AWS).
 
-A fresh install from the 1.2.1 images passed ingest smoke, account smoke, MCP 401, deep and cron
-health, retry smoke, and the backup and restore drill. An in-place upgrade from 1.2.0 to 1.2.1,
-killed mid-stop and rerun, kept data. With Redis forced full, no batch reached the dead-letter
-queue, the consumer stayed paused across a restart, and every accepted event was inserted after the
-limit was restored.
+A fresh install with the new 1.2.2 images passed ingest smoke, account smoke, unauthenticated MCP
+401, deep and cron health 200, retry smoke, scoped secrets, web and ingest healthchecks, the
+maintenance switch (off: 401, on: 503 with Retry-After 60), and the backup and restore drill.
+In-place upgrades to 1.2.2 were tested from 1.2.1, 1.2.0 and 1.1.0, each using that release's
+published installer. The 1.2.2 image tags were removed first so the upgrade loaded images from the
+archive. The upgrade was checked to refuse without backup arguments, with a wrong key, and while a
+backup lock was present; it was killed right after journaling the stop (phase `stopping`), refused
+to rerun while the lock stood, and completed on rerun. Migrate, which includes migration 0073,
+completed. Each upgrade kept its data and then passed web and ingest health, deep and cron health,
+ingest and account smokes, and a 1.2.2 backup.
 
 An AWS soak ran 15h35m at 200 events/s with zero failures (zero failed batches after sender retries
 and nothing lost; the nightly backup returned 502 for about 3m16s while the sender retried) and
